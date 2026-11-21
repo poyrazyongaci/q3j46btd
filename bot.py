@@ -38,7 +38,13 @@ P = {"retreat_hp": 0.0, "recover_hp": 0.8, "range": 75.0, "peek_max": 9.0, "clos
      "ltng_gap": 1,       # 1: back away from a lightning holder inside 65 m even when cover exists
      "shell_dodge": 1,    # 1: run from the landing point of a mortar shell
      "cube_r": 120.0,     # m: in a fight, walk onto power cubes this close (+4% HP and damage each, upgrades)
-     "drop_r": 300.0}     # m: in a fight, go and stand in a supply drop ring this close (full HP, 3 cubes)
+     "drop_r": 300.0,     # m: in a fight, go and stand in a supply drop ring this close (full HP, 3 cubes)
+     "retreat2_hp": 0.0,  # HP share under which we break off when two or more enemies are in contact
+     "finish": 0.0,       # no retreat while the target has less than this share of our own HP
+     "quiet": 0,          # 1: in retreat, shoot only a close or nearly dead target, so regen can start
+     "heal_stay": 0,      # 1: in retreat with nobody in sight, wait at the cover spot instead of looting
+     "laser_range": 0.0}  # m: open-ground fighting distance while we hold a laser, 0 keeps "range"
+P.update({'retreat_hp': 0.4, 'retreat2_hp': 0.5, 'finish': 0.5, 'recover_hp': 0.75})
 try:
     P.update(json.loads(os.environ.get("MECH_P") or "{}"))
 except Exception:
@@ -537,9 +543,16 @@ class Bot:
             primary = threats[0]
             self.last_threat_t = t
         hpf = me["hp"] / max(1.0, me["max_hp"])
-        if hpf < self.P["retreat_hp"]:
+        rh = self.P["retreat_hp"]
+        if self.P["retreat2_hp"] > rh and sum(1 for m in threats if math.dist(m["pos"], p) < 160.0) >= 2:
+            rh = self.P["retreat2_hp"]
+        # a target far weaker than us is finished first: its death is a point and often ends the fight
+        fin = primary is not None and primary.get("hp", 1e9) < self.P["finish"] * me["hp"]
+        if fin:
+            self.retreat = False
+        elif hpf < rh:
             self.retreat = True
-        elif hpf > self.P["recover_hp"] or (self.retreat and t - self.last_threat_t > 7.0 and hpf > 0.6):
+        elif hpf > self.P["recover_hp"] or (self.retreat and not self.P["heal_stay"] and t - self.last_threat_t > 7.0 and hpf > 0.6):
             self.retreat = False
 
         if outside or (must_go and (primary is None or out > 35.0 or t >= z["shrink_start"] - 2.0)):
@@ -552,6 +565,15 @@ class Bot:
         elif primary is not None:
             self.mode = "fight"
             self.fight(a, primary, threats)
+        elif self.retreat and self.P["heal_stay"] and self.spot is not None and t - self.spot_t < 40.0:
+            # hurt and out of sight: regen gives 45 HP a second after 5 quiet seconds, so wait behind the cover
+            self.mode = "heal"
+            s = self.spot
+            if math.hypot(s[0] - p[0], s[1] - p[1]) > 2.0:
+                self.nav(a, s[0], s[1], s[2])
+                if math.hypot(s[0] - p[0], s[1] - p[1]) < 6.0:
+                    self.direct(a, s[0], s[1], stop=0.5)
+            self.look(a)
         else:
             self.mode = "loot"
             self.loot(a, o, nc, nr, dn)
@@ -677,6 +699,8 @@ class Bot:
         elif self.blind_since is None:
             self.blind_since = t
         allow = not self.retreat or close or d < 70.0
+        if self.retreat and self.P["quiet"]:
+            allow = close or primary.get("hp", 1e9) < 0.25 * primary.get("max_hp", 1400)
         if c is not None and c["peek"] is not None:
             self.charge_ok = math.hypot(c["peek"][0] - p[0], c["peek"][1] - p[1]) <= self.P["peek_charge"]
         kite = None
@@ -717,7 +741,7 @@ class Bot:
                     if dd < self.P["drop_r"] and math.hypot(qq[0] - zc[0], qq[1] - zc[1]) < zr - 8.0 \
                             and dr.get("lands_in", 0) < dd / 10.0 + 8.0 and (near is None or dd < near[0]):
                         near = (dd, qq, "drop")
-            if near is None and self.P["grab"] > 0 and ws[1] is None:
+            if near is None and self.P["grab"] > 0 and ws[1] is None and not self.retreat:
                 for it in self.items.values():
                     if it["type"] != "pickup" or it.get("kind") in (None, "gun"):
                         continue
@@ -725,7 +749,7 @@ class Bot:
                     dd = math.hypot(qq[0] - p[0], qq[1] - p[1])
                     if dd < self.P["grab"] and math.hypot(qq[0] - zc[0], qq[1] - zc[1]) < zr - 8.0 and (near is None or dd < near[0]):
                         near = (dd, qq, "weapon")
-            if near is None and self.P["cube_r"] > 0:
+            if near is None and self.P["cube_r"] > 0 and not self.retreat:
                 for it in self.items.values():
                     if it["type"] != "cube":
                         continue
@@ -764,6 +788,8 @@ class Bot:
             self.strafe_until = self.t + self.rng.uniform(0.5, 1.3)
         ew = primary.get("weapons") or []
         want = self.P["range"]
+        if self.P["laser_range"] > 0 and any(w and w["kind"] == "laser" for w in me["weapons"]):
+            want = self.P["laser_range"]  # the beam hits at any range, their bullets do not
         if "lightning" in ew:
             want = 85.0
         if have_ltng and "lightning" not in ew:
