@@ -66,7 +66,7 @@ P = {"retreat_hp": 0.0, "recover_hp": 0.8, "range": 75.0, "peek_max": 9.0, "clos
      "explore_cubes": 10,  # explore only below this many cubes
      "open_boost": 0.0,   # s: outside a fight, boost every move this early in the match (0 is off)
      "mortar_v": 9.0}     # m/s: lob a shell only at a target slower than this (walking speed is 11.7)
-P.update({'mortar_v': 14})
+P.update({'open_boost': 4})
 try:
     P.update(json.loads(os.environ.get("MECH_P") or "{}"))
 except Exception:
