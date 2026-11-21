@@ -63,8 +63,10 @@ P = {"retreat_hp": 0.0, "recover_hp": 0.8, "range": 75.0, "peek_max": 9.0, "clos
      "salt": 0,           # added to the seed of our own random choices (strafe side and timing)
      "explore": 0,        # 1: with no loot known, walk to ground we have not seen yet instead of waiting at a strong spot
      "explore_t": 200.0,  # s: explore only this early in the match
-     "explore_cubes": 10}  # explore only below this many cubes
-P.update({'explore': 1})
+     "explore_cubes": 10,  # explore only below this many cubes
+     "open_boost": 0.0,   # s: outside a fight, boost every move this early in the match (0 is off)
+     "mortar_v": 9.0}     # m/s: lob a shell only at a target slower than this (walking speed is 11.7)
+P.update({'salt': 1})
 try:
     P.update(json.loads(os.environ.get("MECH_P") or "{}"))
 except Exception:
@@ -498,7 +500,7 @@ class Bot:
         g = self.cfg["weapons"]["mortar"]["gravity"]
         q = m["pos"]
         tv = m.get("vel") or [0, 0, 0]
-        if math.hypot(tv[0], tv[1]) > 9:
+        if math.hypot(tv[0], tv[1]) > self.P["mortar_v"]:
             return None
         sc = self.scale(self.me["cubes"])
         oz = p[2] + self.h_mech * sc + 0.5
@@ -655,6 +657,10 @@ class Bot:
                     self.glance_until = -9.0
                 else:
                     a["aim"] = [self.dmg_bearing, 0.0]  # facing the attacker also takes away the rear bonus
+        if t < self.P["open_boost"] and self.mode != "fight" and me["energy"] > 20.0:
+            mv = a.get("move", [0, 0])
+            if math.hypot(mv[0], mv[1]) > 0.3:
+                a["boost"] = True
         if "aim" in a:
             self.aim = a["aim"]
         gun = next((w for w in me["weapons"] if w and w["kind"] == "gun"), None)
