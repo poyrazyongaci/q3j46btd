@@ -43,8 +43,11 @@ P = {"retreat_hp": 0.0, "recover_hp": 0.8, "range": 75.0, "peek_max": 9.0, "clos
      "finish": 0.0,       # no retreat while the target has less than this share of our own HP
      "quiet": 0,          # 1: in retreat, shoot only a close or nearly dead target, so regen can start
      "heal_stay": 0,      # 1: in retreat with nobody in sight, wait at the cover spot instead of looting
-     "laser_range": 0.0}  # m: open-ground fighting distance while we hold a laser, 0 keeps "range"
-P.update({'laser_range': 145.0})
+     "laser_range": 0.0,  # m: open-ground fighting distance while we hold a laser, 0 keeps "range"
+     "picky": 0,          # 1: fight only mechs that hurt us, aim at us or stand close; ignore the rest
+     "picky_r": 40.0,     # m: with picky, a mech this close always counts
+     "picky_aim": 0.2}    # rad: with picky, a mech whose aim is this near to us for 0.3 s counts
+P.update({'picky': 1})
 try:
     P.update(json.loads(os.environ.get("MECH_P") or "{}"))
 except Exception:
@@ -80,6 +83,8 @@ class Bot:
         self.size_per_cube = self.cfg["cubes"].get("size_per_cube", 0.05)
         self.h_mech = m["height"]
         self.known = {}
+        self.hostile = set()
+        self.aim_n = {}
         self.items = {}
         self.retreat = False
         self.last_dmg_t = -99.0
@@ -159,6 +164,19 @@ class Bot:
             r = dict(m)
             r["seen"] = t
             self.known[m["id"]] = r
+            if m["kind"] == "mech" and m["id"] not in self.hostile and m.get("aim"):
+                q = m["pos"]
+                d = math.hypot(p[0] - q[0], p[1] - q[1])
+                off = abs((math.atan2(p[1] - q[1], p[0] - q[0]) - m["aim"][0] + math.pi) % (2 * math.pi) - math.pi)
+                if d < self.P["picky_r"]:
+                    self.hostile.add(m["id"])
+                elif off < self.P["picky_aim"] and d < 260.0:
+                    n = self.aim_n.get(m["id"], 0) + 1
+                    self.aim_n[m["id"]] = n
+                    if n >= 3:
+                        self.hostile.add(m["id"])
+                else:
+                    self.aim_n[m["id"]] = 0
         for k in list(self.known):
             r = self.known[k]
             if t - r["seen"] > (6.0 if r["kind"] == "mech" else 25.0):
@@ -184,6 +202,8 @@ class Bot:
                 self.last_dmg_t = t
                 self.dmg_bearing = e["bearing"]
                 self.dmg_by = e.get("by")
+                if e.get("by") is not None:
+                    self.hostile.add(e["by"])
             elif e["type"] == "kill" and self.P["kills"]:
                 r = self.known.pop(e.get("target"), None)
                 if r is not None:
@@ -526,6 +546,8 @@ class Bot:
         self.must_go = must_go
 
         threats = [m for m in self.known.values() if m["kind"] == "mech" and t - m["seen"] <= self.P["mem_s"]]
+        if self.P["picky"]:
+            threats = [m for m in threats if m["id"] in self.hostile]
         primary = None
         self.charge_ok = False
         if threats:
