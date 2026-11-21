@@ -77,8 +77,9 @@ P = {"retreat_hp": 0.0, "recover_hp": 0.8, "range": 75.0, "peek_max": 9.0, "clos
      "strafe_flip": 0,    # 1: always reverse at that moment instead of picking a side at random
      "bdodge": 0,         # step out of a gun bullet's path. 1: while strafing, 2: also outside a fight, 3: always
      "bdodge_m": 1.0,     # m of margin round our body that counts as a hit
-     "bdodge_t": 0.6}     # s: react only to a bullet that arrives within this time
-P.update({'bdodge': 2})
+     "bdodge_t": 0.6,     # s: react only to a bullet that arrives within this time
+     "bdodge_clear": 1}   # 1: step only when the step gets the whole body out of the bullet's path
+P.update({'bdodge': 3})
 try:
     P.update(json.loads(os.environ.get("MECH_P") or "{}"))
 except Exception:
@@ -945,6 +946,8 @@ class Bot:
                     pick = (gain, s, boost)
         if pick is None or pick[0] < abs(ml) + 0.3:
             return False
+        if self.P["bdodge_clear"] and pick[0] < 2.5 * size + 0.2:
+            return False  # too late to get clear, and flapping on the spot makes the next shot easy
         a["move"] = [nx * pick[1], ny * pick[1]]
         a["boost"] = pick[2]
         self.dodges += 1
