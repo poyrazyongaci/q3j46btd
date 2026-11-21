@@ -59,8 +59,12 @@ P = {"retreat_hp": 0.0, "recover_hp": 0.8, "range": 75.0, "peek_max": 9.0, "clos
      "no_mortar": 0,      # 1: never carry a mortar, since a laser hit does 60% more to a mech that holds one
      "rush": 0,           # 1: with lightning, close in to arc range instead of trading from cover
      "rush_r": 110.0,     # m: rush only a target this close
-     "rush_hp": 0.45}     # rush only above this share of our HP
-P.update({'laser_r': 300.0, 'grab_laser': 60.0})
+     "rush_hp": 0.45,     # rush only above this share of our HP
+     "salt": 0,           # added to the seed of our own random choices (strafe side and timing)
+     "explore": 0,        # 1: with no loot known, walk to ground we have not seen yet instead of waiting at a strong spot
+     "explore_t": 200.0,  # s: explore only this early in the match
+     "explore_cubes": 10}  # explore only below this many cubes
+P.update({'laser_r': 300, 'grab_laser': 60, 'no_mortar': 1, 'rush': 1, 'explore': 1})
 try:
     P.update(json.loads(os.environ.get("MECH_P") or "{}"))
 except Exception:
@@ -91,13 +95,16 @@ class Bot:
     def __init__(self, hello):
         self.cfg = hello["config"]
         self.W = World(os.path.join(HERE, "data", "map.npz"), self.cfg)
-        self.rng = random.Random(hello.get("seed", 1))
+        self.rng = random.Random(hello.get("seed", 1) + 7919 * int(P.get("salt", 0)))
         m = self.cfg["mech"]
         self.size_per_cube = self.cfg["cubes"].get("size_per_cube", 0.05)
         self.h_mech = m["height"]
         self.known = {}
         self.hostile = set()
         self.rushing = False
+        self.visited = set()
+        self.exp_goal = None
+        self.exp_t0 = 0.0
         self.aim_n = {}
         self.items = {}
         self.retreat = False
@@ -952,8 +959,43 @@ class Bot:
                 self.nav(a, q[0], q[1], q[2])
                 self.look(a)
 
+    def explore(self, a, nc, nr):
+        """Walk to the nearest 100 m grid point we have not been near. Returns False when none is left."""
+        p = self.me["pos"]
+        z = self.zone
+        t = self.t
+        g0 = (int(round(p[0] / 100.0)), int(round(p[1] / 100.0)))
+        if math.hypot(g0[0] * 100.0 - p[0], g0[1] * 100.0 - p[1]) < 55.0:
+            self.visited.add(g0)
+        if self.exp_goal is not None and (self.exp_goal in self.visited or t - self.exp_t0 > 25.0):
+            self.visited.add(self.exp_goal)  # reached, or it cannot be reached in sane time
+            self.exp_goal = None
+        if self.exp_goal is None:
+            best, bs = None, 1e9
+            for gx in range(g0[0] - 3, g0[0] + 4):
+                for gy in range(g0[1] - 3, g0[1] + 4):
+                    if (gx, gy) in self.visited:
+                        continue
+                    x, y = gx * 100.0, gy * 100.0
+                    if math.hypot(x - z["center"][0], y - z["center"][1]) > z["radius"] - 30.0:
+                        continue
+                    if math.hypot(x - nc[0], y - nc[1]) > nr - 15.0:
+                        continue
+                    d = math.hypot(x - p[0], y - p[1])
+                    if d < bs:
+                        best, bs = (gx, gy), d
+            if best is None:
+                return False
+            self.exp_goal, self.exp_t0 = best, t
+        self.nav(a, self.exp_goal[0] * 100.0, self.exp_goal[1] * 100.0)
+        self.look(a)
+        return True
+
     def hold(self, a, nc, nr, dn):
         """Nothing to do: drift to a strong spot inside the next circle and watch."""
+        if self.P["explore"] and self.t < self.P["explore_t"] and self.me["cubes"] < self.P["explore_cubes"] \
+                and not self.must_go and self.explore(a, nc, nr):
+            return
         p = self.me["pos"]
         best, bs = None, 1e9
         for f in self.forts:
