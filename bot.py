@@ -68,8 +68,11 @@ P = {"retreat_hp": 0.0, "recover_hp": 0.8, "range": 75.0, "peek_max": 9.0, "clos
      "mortar_v": 9.0,     # m/s: lob a shell only at a target slower than this (walking speed is 11.7)
      "farm": 0.0,         # m: in a fight, while the target is out of sight, shoot a crate or drone this close (0 is off)
      "farm_s": 0.6,       # s the target must be out of sight before that
-     "farm_ammo": 4}      # rounds that must be in the magazine before that
-P.update({'farm': 70})
+     "farm_ammo": 4,      # rounds that must be in the magazine before that
+     "loot_r": 170.0,     # m: outside a fight, go for a cube, weapon or crate this close
+     "npc_r": 150.0,      # m: outside a fight, hunt a drone this close (2 cubes each)
+     "npc_hp": 0.7}       # hunt drones only above this share of our HP
+P.update({'loot_r': 260})
 try:
     P.update(json.loads(os.environ.get("MECH_P") or "{}"))
 except Exception:
@@ -943,7 +946,7 @@ class Bot:
             q = it["pos"]
             d = math.hypot(q[0] - p[0], q[1] - p[1])
             want_laser = it["type"] == "pickup" and it.get("kind") == "laser" and "laser" not in held and d < self.P["laser_r"]
-            if (d > 170 and not want_laser) or not inside(q):
+            if (d > self.P["loot_r"] and not want_laser) or not inside(q):
                 continue
             if it["type"] == "pickup":
                 if it["kind"] in held or PREF.get(it["kind"], 0) <= cur or (self.P["no_mortar"] and it["kind"] == "mortar"):
@@ -957,12 +960,12 @@ class Bot:
                 s = d - 15.0
             if s < bs:
                 best, bs = (it["type"], it), s
-        if hpf > 0.7:
+        if hpf > self.P["npc_hp"]:
             for m in self.known.values():
                 if m["kind"] != "npc":
                     continue
                 d = math.dist(m["pos"], p)
-                if d < 150 and inside(m["pos"]) and d + 15.0 < bs:
+                if d < self.P["npc_r"] and inside(m["pos"]) and d + 15.0 < bs:
                     best, bs = ("npc", m), d + 15.0
         if best is None:
             self.hold(a, nc, nr, dn)
