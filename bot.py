@@ -19,6 +19,10 @@ PREF = {"laser": 3, "lightning": 2, "mortar": 1, "gun": 0}
 UPGRADES = ["plating", "armor", "nanites", "gun_mag", "gun_damage", "laser_damage", "gun_rate", "laser_charge",
             "servos", "gun_velocity", "gyros", "lightning_chain", "lightning_range",
             "mortar_reload", "capacitor", "reactor", "jets", "sensors"]
+# the same list ordered by fighting power: a bigger magazine is +31% sustained gun damage, armor only 9% more life
+UPGRADES2 = ["gun_mag", "gun_damage", "plating", "gun_rate", "laser_damage", "armor", "laser_charge", "gun_velocity",
+             "nanites", "servos", "gyros", "lightning_efficiency", "lightning_chain", "lightning_range",
+             "mortar_reload", "capacitor", "reactor", "jets", "sensors"]
 # tunables, overridden per run for local A/B tests
 P = {"retreat_hp": 0.0, "recover_hp": 0.8, "range": 75.0, "peek_max": 9.0, "close": 30.0,
      "danger_mem": 0.3,   # s to stay hidden after seeing a laser charging at us
@@ -44,10 +48,11 @@ P = {"retreat_hp": 0.0, "recover_hp": 0.8, "range": 75.0, "peek_max": 9.0, "clos
      "quiet": 0,          # 1: in retreat, shoot only a close or nearly dead target, so regen can start
      "heal_stay": 0,      # 1: in retreat with nobody in sight, wait at the cover spot instead of looting
      "laser_range": 0.0,  # m: open-ground fighting distance while we hold a laser, 0 keeps "range"
+     "ups": 0,            # 1: pick upgrades by fighting power (UPGRADES2)
      "picky": 0,          # 1: fight only mechs that hurt us, aim at us or stand close; ignore the rest
      "picky_r": 40.0,     # m: with picky, a mech this close always counts
      "picky_aim": 0.2}    # rad: with picky, a mech whose aim is this near to us for 0.3 s counts
-P.update({'range': 60.0})
+P.update({'ups': 1})
 try:
     P.update(json.loads(os.environ.get("MECH_P") or "{}"))
 except Exception:
@@ -151,7 +156,8 @@ class Bot:
         best, bs = 0, 1e9
         for i, c in enumerate(offer.get("choices", [])):
             cid = c.get("id", "")
-            s = UPGRADES.index(cid) if cid in UPGRADES else 50
+            order = UPGRADES2 if self.P["ups"] else UPGRADES
+            s = order.index(cid) if cid in order else 50
             if s < bs:
                 best, bs = i, s
         return best
