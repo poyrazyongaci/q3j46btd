@@ -124,7 +124,6 @@ P = {"retreat_hp": 0.0, "recover_hp": 0.8, "range": 75.0, "peek_max": 9.0, "clos
     "max_t": 0.0,        # m: above 0, never pick a target farther than this
     "nocover": 0,        # 1: with a laser or lightning, or while finishing, fight in the open and keep the line of sight
     "foe_range": 0,      # 1: fighting distance by our weapon and by the weapon the target holds
-    "kite": 0.0,         # m: on open ground, for 2 s after the target hit us, keep at least this distance while firing (0 is off)
     "ring": 0,           # 1: in the open, each decision pick the best of 16 spots 6 m around us (range, sight line, other enemies)
     "fin_r": 0.0,        # m: above 0, close to this distance on a weak target while we are healthy and few are near
     "cube_low": 1.0,     # share of cube_r that counts while we are at or under half HP
@@ -140,7 +139,7 @@ COVER_P = {"picky": 1, "avoid": 1, "den": 1, "quiet": 1, "heal_stay": 1, "retrea
 # a match where the others fight each other: only outlasting them scores
 FFA_P = {"picky": 1, "avoid": 1, "retreat_hp": 0.5, "retreat2_hp": 0.7, "quiet": 1, "heal_stay": 1, "recover_hp": 0.9,
          "bdodge": 3, "bdodge_clear": 0, "grab_laser": 120.0}
-P.update({'npc_r': 230, 'npc_hp': 0.5, 'ffa_sw': 1, 'lose': 1, 'lethal': 0.7, 'no_mortar': 1, 'laser_r': 240, 'loot_r': 150, 'cube_r': 70, 'cube_low': 0.57, 'laser_range': 120, 'range': 85, 'eng': 1, 'max_t': 240, 'foe_range': 1, 'ups': 2, 'bdodge': 1, 'strafe_lo': 0.3, 'strafe_hi': 1.0, 'nocover': 1, 'ring': 1, 'kite': 110})
+P.update({'npc_r': 230, 'npc_hp': 0.5, 'ffa_sw': 1, 'lose': 1, 'lethal': 0.7, 'no_mortar': 1, 'laser_r': 240, 'loot_r': 150, 'cube_r': 70, 'cube_low': 0.57, 'laser_range': 120, 'range': 85, 'eng': 1, 'max_t': 240, 'foe_range': 1, 'ups': 2, 'bdodge': 1, 'strafe_lo': 0.3, 'strafe_hi': 1.0, 'tsel': 1, 'fin_r': 20})
 try:
     P.update(json.loads(os.environ.get("MECH_P") or "{}"))
 except Exception:
@@ -1215,8 +1214,6 @@ class Bot:
                     want = max(want, 64.0)
                 if "mortar" in ew:
                     want = max(want, 80.0)
-        if self.P["kite"] and self.t - self.hit_t.get(primary.get("id"), -9.0) < 2.0:
-            want = max(want, self.P["kite"])
         if self.fin2:
             want = self.P["fin_r"]
         if self.retreat:
