@@ -83,7 +83,7 @@ P = {"retreat_hp": 0.0, "recover_hp": 0.8, "range": 75.0, "peek_max": 9.0, "clos
     "eco_t": 0.0,        # s: this early, a far mech that did not hurt or aim at us does not start a fight. 0: off
     "eco_cubes": 10,     # that rule holds only below this many cubes
     "eco_r": 150.0}      # m: a mech closer than this always counts
-P.update({'npc_r': 230, 'npc_hp': 0.5, 'salt': 2})
+P.update({'npc_r': 230, 'npc_hp': 0.5, 'open_boost': 8})
 try:
     P.update(json.loads(os.environ.get("MECH_P") or "{}"))
 except Exception:
