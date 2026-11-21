@@ -72,7 +72,7 @@ P = {"retreat_hp": 0.0, "recover_hp": 0.8, "range": 75.0, "peek_max": 9.0, "clos
      "loot_r": 170.0,     # m: outside a fight, go for a cube, weapon or crate this close
      "npc_r": 150.0,      # m: outside a fight, hunt a drone this close (2 cubes each)
      "npc_hp": 0.7}       # hunt drones only above this share of our HP
-P.update({'no_mortar': 1})
+P.update({'mortar_v': 14})
 try:
     P.update(json.loads(os.environ.get("MECH_P") or "{}"))
 except Exception:
