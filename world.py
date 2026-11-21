@@ -125,17 +125,19 @@ class World:
                 n = int(round(L))
                 # 1 m profile along the line
                 prof = []
+                clear = np.ones_like(ok)
                 for s in range(n + 1):
                     f = s / n
                     pj = np.rint(1 + G * aj + f * G * dj).astype(np.int32)
                     pi = np.rint(1 + G * ai + f * G * di).astype(np.int32)
                     prof.append(S[pj, pi])
+                    clear &= free[pj, pi]
                 prof = np.stack(prof, axis=0)
                 rise = np.diff(prof, axis=0)
                 unit = L / n
                 adjacent = max(abs(dj), abs(di)) == 1
                 if adjacent:
-                    walk = ok & np.all(rise <= (self.step + 0.05) * max(1.0, unit), axis=0)
+                    walk = ok & clear & np.all(rise <= (self.step + 0.05) * max(1.0, unit), axis=0)
                     drop = np.maximum(0.0, -dz)
                     w = L / self.walk + np.where(drop > 3.0, 1.0 + drop * 0.05, 0.0)
                     self._add(rows, cols, wts, walk, aj, ai, bj, bi, w)
@@ -167,6 +169,12 @@ class World:
         rows.append(a)
         cols.append(b)
         wts.append(np.broadcast_to(w, mask.shape)[mask])
+
+    def penalize(self, n, cost):
+        """Make every edge into node n cost more, after the bot got stuck heading there."""
+        a, b = self.GT.indptr[n], self.GT.indptr[n + 1]
+        self.GT.data[a:b] += cost
+        self._cache.clear()
 
     def node(self, x, y):
         gi = int(round((x - self.minx - 1) / G))

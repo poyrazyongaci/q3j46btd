@@ -19,6 +19,23 @@ PREF = {"laser": 3, "lightning": 2, "mortar": 1, "gun": 0}
 UPGRADES = ["plating", "armor", "nanites", "gun_damage", "laser_damage", "gun_rate", "laser_charge",
             "servos", "gun_mag", "gun_velocity", "gyros", "lightning_chain", "lightning_range",
             "mortar_reload", "capacitor", "reactor", "jets", "sensors"]
+# tunables, overridden per run for local A/B tests
+P = {"retreat_hp": 0.0, "recover_hp": 0.8, "range": 75.0, "peek_max": 9.0, "close": 30.0,
+     "danger_mem": 0.3,   # s to stay hidden after seeing a laser charging at us
+     "crowd": 99,         # hide instead of trading when this many enemies were seen in the last 2 s
+     "crowd_r": 120.0,
+     "los_bias": 50.0,     # m added to the target score of an enemy we cannot hit right now
+     "far_always": 0,     # 1: search far cover whenever no near cover exists
+     "mem_s": 2.0,        # s a mech stays a threat after the server stops listing it (the server already tracks 5 s)
+     "kills": 1,          # 1: forget a mech the moment the server reports our kill
+     "laser_disc": 1,     # 1: start a laser charge only when a shot is likely before the hold timer runs out
+     "peek_charge": 6.0,  # m to the peek spot under which a charge behind cover is allowed
+     "hear": 1,           # 1: with no threat known, face the last near sound
+     "glance": 1}         # 1: turn to an attacker we cannot see
+try:
+    P.update(json.loads(os.environ.get("MECH_P") or "{}"))
+except Exception:
+    pass
 
 
 def log(*a):
@@ -53,6 +70,11 @@ class Bot:
         self.items = {}
         self.retreat = False
         self.last_dmg_t = -99.0
+        self.dmg_by = None
+        self.snd_t = -99.0
+        self.snd_bearing = 0.0
+        self.charge_ok = False
+        self.glance_until = -9.0
         self.dmg_bearing = 0.0
         self.last_threat_t = -99.0
         self.strafe_sign = 1
@@ -61,6 +83,15 @@ class Bot:
         self.unstick_until = 0.0
         self.unstick_dir = (0.0, 0.0)
         self.jet = None
+        self.P = dict(P)
+        self.nav_used = False
+        self.nav_hop = None
+        self.no_short_until = 0.0
+        self.stuck_at = None
+        self.stuck_n = 0
+        self.spot = None
+        self.spot_t = -9.0
+        self.bad_spots = []
         self.cover = None
         self.cover_t = -9.0
         self.near = ring(26, 2.0)
@@ -129,10 +160,17 @@ class Bot:
             q = self.items[k]["pos"]
             if math.hypot(q[0] - p[0], q[1] - p[1]) < 38 and self.W.los1(eye, [q[0], q[1], q[2] + 1.0]):
                 del self.items[k]
+        for sd in o.get("sounds", []):
+            if sd.get("dist") == "near" and sd.get("kind") in ("step", "boost", "gun", "laser_charge", "laser", "reload", "jet", "lightning"):
+                self.snd_t = t - (sd.get("age") or 0.0)
+                self.snd_bearing = sd["bearing"]
         for e in o.get("events", []):
             if e["type"] == "damaged" and e.get("bearing") is not None:
                 self.last_dmg_t = t
                 self.dmg_bearing = e["bearing"]
+                self.dmg_by = e.get("by")
+            elif e["type"] == "kill" and self.P["kills"]:
+                self.known.pop(e.get("target"), None)
             elif e["type"] == "took":
                 self.items.pop(e.get("id"), None)
 
@@ -153,14 +191,12 @@ class Bot:
         W, me = self.W, self.me
         p = me["pos"]
         dgoal = math.hypot(x - p[0], y - p[1])
+        self.nav_used = True
         if self.jet is not None:
             j = self.jet
-            if self.t - j["t0"] > 6.0 or (me["grounded"] and self.t - j["t0"] > 0.4):
-                self.jet = None
-            else:
-                self.direct(a, j["x"], j["y"], stop=0.3)
-                a["boost"] = p[2] < j["h"] + 1.0 and me["energy"] > 1
-                return dgoal
+            self.direct(a, j["x"], j["y"], stop=0.3)
+            a["boost"] = p[2] < j["h"] + 1.0 and me["energy"] > 1
+            return dgoal
         gn = W.free_node(x, y, z, r=5)
         mn = W.free_node(p[0], p[1], p[2], r=3)
         if gn is None or mn is None:
@@ -187,13 +223,21 @@ class Bot:
             self.direct(a, x, y)
             return dgoal
         target = None
-        for n in reversed(path):
-            tx, ty, th = W.node_xy(n)
-            if abs(th - p[2]) < 1.5 and W.walkable_line(p[0], p[1], tx, ty):
-                target = (tx, ty, th)
-                break
+        self.nav_hop = path[0]
+        if self.t >= self.no_short_until:
+            for n in reversed(path):
+                tx, ty, th = W.node_xy(n)
+                if abs(th - p[2]) < 1.5 and W.walkable_line(p[0], p[1], tx, ty):
+                    target = (tx, ty, th)
+                    break
         if target is None:
             target = W.node_xy(path[0])
+            tx, ty, th = target
+            # off the node center a checked edge can clip a corner: line up on the node first
+            if abs(th - p[2]) < 1.5 and not W.walkable_line(p[0], p[1], tx, ty):
+                cx, cy, ch = W.node_xy(mn)
+                if math.hypot(cx - p[0], cy - p[1]) > 1.0 and abs(ch - p[2]) < 1.5 and W.walkable_line(p[0], p[1], cx, cy):
+                    target = (cx, cy, ch)
         tx, ty, th = target
         if th > p[2] + 1.3 and me["grounded"]:
             need = min(me["max_energy"] - 3.0, (th - p[2]) * 1.7 + 12.0)
@@ -202,7 +246,7 @@ class Bot:
                 return dgoal
             a["jump"] = True
             a["boost"] = True
-            self.jet = {"x": tx, "y": ty, "h": th, "t0": self.t}
+            self.jet = {"x": tx, "y": ty, "h": th, "t0": self.t, "node": path[0]}
             self.direct(a, tx, ty, stop=0.3)
             return dgoal
         dx, dy = tx - p[0], ty - p[1]
@@ -214,6 +258,7 @@ class Bot:
 
     def unstick(self, a):
         me = self.me
+        p = me["pos"]
         mv = a.get("move", [0, 0])
         sp = math.hypot(me["vel"][0], me["vel"][1])
         if self.t < self.unstick_until:
@@ -224,14 +269,33 @@ class Bot:
             self.stuck += 1
         else:
             self.stuck = 0
-        if self.stuck >= 7:
-            self.stuck = 0
-            s = self.rng.choice((-1, 1))
-            self.unstick_dir = (-mv[1] * s * 0.8 + mv[0] * 0.3, mv[0] * s * 0.8 + mv[1] * 0.3)
-            self.unstick_until = self.t + 0.7
-            a["jump"] = True
-            a["boost"] = True
-            self.W._cache.clear()
+        if self.stuck < 6:
+            return
+        self.stuck = 0
+        sa = self.stuck_at
+        if sa and math.hypot(p[0] - sa[0], p[1] - sa[1]) < 8.0 and self.t - sa[2] < 12.0:
+            self.stuck_n += 1
+        else:
+            self.stuck_n = 1
+        self.stuck_at = (p[0], p[1], self.t)
+        n = self.stuck_n
+        # whatever we were heading for is not reachable this way: make it cost more
+        if self.nav_used and self.nav_hop is not None:
+            self.W.penalize(self.nav_hop, 8.0 * n)
+            self.no_short_until = self.t + 6.0
+        if self.spot is not None and self.spot_t == self.t:
+            self.bad_spots.append((self.spot[0], self.spot[1], self.t + 20.0))
+            self.bad_spots = self.bad_spots[-8:]
+            self.cover = None
+        self.strafe_sign = -self.strafe_sign
+        self.strafe_until = self.t + 1.0
+        s = self.rng.choice((-1, 1))
+        back = 0.3 if n == 1 else -0.7
+        self.unstick_dir = (-mv[1] * s * 0.8 + mv[0] * back, mv[0] * s * 0.8 + mv[1] * back)
+        self.unstick_until = self.t + (0.7 if n == 1 else 1.2)
+        a["move"] = list(self.unstick_dir)
+        a["jump"] = True
+        a["boost"] = True
 
     # ------------------------------------------------------------------ cover
     def find_cover(self, threats, primary, offs, straight):
@@ -243,6 +307,9 @@ class Bot:
         ok = W.is_free(xs, ys)
         zc = self.zone["center"]
         ok &= np.hypot(xs - zc[0], ys - zc[1]) < self.zone["radius"] - 6
+        for bx, by, until in self.bad_spots:
+            if until > self.t:
+                ok &= np.hypot(xs - bx, ys - by) > 3.0
         if straight:
             ok &= np.abs(h - p[2]) < 2.5
             ok &= W.walkable_to(p[0], p[1], xs, ys)
@@ -280,7 +347,7 @@ class Bot:
                 dp = np.hypot(cand[pk, 0] - cand[hi, 0], cand[pk, 1] - cand[hi, 1])
                 k = int(np.argmin(dp))
                 dpk = float(dp[k])
-                peek = cand[pk[k]] if dpk <= 9.0 else None
+                peek = cand[pk[k]] if dpk <= self.P["peek_max"] else None
             else:
                 dpk, peek = 12.0, None
             s = float(d[hi]) + 1.5 * min(dpk, 12.0)
@@ -354,7 +421,9 @@ class Bot:
                     if ch >= full + 1.6:
                         fire[i] = False
                 elif w["cooldown"] <= 0.05 and m.get("kind") == "mech" and d < rng and allow:
-                    fire[i] = True
+                    # a charge that finds no line within the hold time is a wasted beam at half walking speed
+                    if not self.P["laser_disc"] or (los and visible) or self.charge_ok:
+                        fire[i] = True
             elif k == "lightning":
                 if allow and los and d <= w["stats"]["range"] * 0.97 and ey < 0.2 and me["energy"] > 12:
                     fire[i] = True
@@ -416,6 +485,13 @@ class Bot:
         if o.get("offer"):
             a["pick"] = self.pick(o["offer"])
         self.W.budget = 1
+        self.nav_used = False
+        if self.jet is not None:
+            j = self.jet
+            if t - j["t0"] > 6.0 or (me["grounded"] and t - j["t0"] > 0.4):
+                if me["grounded"] and p[2] < j["h"] - 1.0:
+                    self.W.penalize(j["node"], 15.0)  # the jump did not get us up there
+                self.jet = None
         self.remember(o)
         self.take_loot(a, o)
 
@@ -428,32 +504,56 @@ class Bot:
         outside = dc > z["radius"] - 4.0
         self.must_go = must_go
 
-        threats = [m for m in self.known.values() if m["kind"] == "mech" and t - m["seen"] <= 5.0]
+        threats = [m for m in self.known.values() if m["kind"] == "mech" and t - m["seen"] <= self.P["mem_s"]]
         primary = None
+        self.charge_ok = False
         if threats:
             def score(m):
                 d = math.dist(m["pos"], p)
                 return d * (0.5 + m.get("hp", 1400) / max(1.0, m.get("max_hp", 1400))) + 40.0 * (t - m["seen"])
             threats.sort(key=score)
+            lb = self.P["los_bias"]
+            if lb > 0 and len(threats) > 1:
+                # shoot back at what can be hit, not at the weakest name on the list
+                top = threats[:4]
+                sc = [score(m) + (0.0 if (t - m["seen"] < 0.3 and self.can_hit(m)) else lb) for m in top]
+                order = sorted(range(len(top)), key=lambda i: sc[i])
+                threats[:4] = [top[i] for i in order]
             primary = threats[0]
             self.last_threat_t = t
         hpf = me["hp"] / max(1.0, me["max_hp"])
-        if hpf < 0.38:
+        if hpf < self.P["retreat_hp"]:
             self.retreat = True
-        elif hpf > 0.8 or (self.retreat and t - self.last_threat_t > 7.0 and hpf > 0.6):
+        elif hpf > self.P["recover_hp"] or (self.retreat and t - self.last_threat_t > 7.0 and hpf > 0.6):
             self.retreat = False
 
         if outside or (must_go and (primary is None or out > 35.0 or t >= z["shrink_start"] - 2.0)):
+            self.mode = "zone"
             self.go_zone(a, nc, nr, margin, dn, outside or t >= z["shrink_start"] - 4.0)
             if primary is not None:
                 self.shoot(a, primary)
             else:
                 self.look(a)
         elif primary is not None:
+            self.mode = "fight"
             self.fight(a, primary, threats)
         else:
+            self.mode = "loot"
             self.loot(a, o, nc, nr, dn)
+        if self.jet is not None and not self.nav_used:
+            # a jump in progress is finished whatever the mode, half a jump only falls back
+            j = self.jet
+            self.direct(a, j["x"], j["y"], stop=0.3)
+            a["boost"] = p[2] < j["h"] + 1.0 and me["energy"] > 1
         self.unstick(a)
+        if self.P["glance"] and self.dmg_by is not None:
+            if t - self.last_dmg_t < 0.15 and not any(m["id"] == self.dmg_by for m in o.get("mechs", [])):
+                self.glance_until = t + 0.9
+            if t < self.glance_until:
+                if any(m["id"] == self.dmg_by for m in o.get("mechs", [])):
+                    self.glance_until = -9.0
+                else:
+                    a["aim"] = [self.dmg_bearing, 0.0]  # facing the attacker also takes away the rear bonus
         if "aim" in a:
             self.aim = a["aim"]
         gun = next((w for w in me["weapons"] if w and w["kind"] == "gun"), None)
@@ -473,6 +573,9 @@ class Bot:
         me = self.me
         if self.t - self.last_dmg_t < 2.5:
             a["aim"] = [self.dmg_bearing, 0.0]
+            return
+        if self.P["hear"] and self.t - self.snd_t < 1.5:
+            a["aim"] = [self.snd_bearing, 0.0]
             return
         if yaw is None:
             mv = a.get("move", [0, 0])
@@ -499,21 +602,22 @@ class Bot:
         # is a laser pointed at me
         danger = False
         for m in threats:
-            if m.get("charging") and t - m["seen"] < 0.3:
+            if m.get("charging") and t - m["seen"] < self.P["danger_mem"]:
                 b = math.atan2(p[1] - m["pos"][1], p[0] - m["pos"][0])
                 if abs(adiff(m["aim"][0], b)) < 0.25:
                     danger = True
-        if laser:
+        if laser and not self.P["laser_disc"]:
             ready = laser_full or (gun_ready and not laser_soon)
         else:
-            ready = gun_ready
+            ready = gun_ready or laser_full
         if ltng and d < ltng["stats"]["range"]:
             ready = True
-        want_hide = self.retreat or danger or not ready
-        close = d < 30.0
+        crowd = sum(1 for m in threats if t - m["seen"] < 2.0 and math.dist(m["pos"], p) < self.P["crowd_r"])
+        want_hide = self.retreat or danger or not ready or crowd >= self.P["crowd"]
+        close = d < self.P["close"]
         if self.cover is None or t - self.cover_t > 0.3:
             c = self.find_cover(threats, primary, self.near, True)
-            if c is None and (self.retreat or d > 45.0):
+            if c is None and (self.retreat or d > 45.0 or self.P["far_always"]):
                 c = self.find_cover(threats, primary, self.far, False)
             self.cover = c
             self.cover_t = t
@@ -524,8 +628,11 @@ class Bot:
         elif self.blind_since is None:
             self.blind_since = t
         allow = not self.retreat or close or d < 70.0
+        if c is not None and c["peek"] is not None:
+            self.charge_ok = math.hypot(c["peek"][0] - p[0], c["peek"][1] - p[1]) <= self.P["peek_charge"]
         if c is not None and not (close and seen_now and not self.retreat and c["peek"] is None):
             spot = c["hide"] if (want_hide or c["peek"] is None) else c["peek"]
+            self.spot, self.spot_t = spot, t
             if c["straight"]:
                 self.direct(a, spot[0], spot[1], stop=0.5)
             else:
@@ -541,7 +648,7 @@ class Bot:
         # pre-charge the laser behind cover so the peek is one beam
         if laser and want_hide and not self.retreat and laser_soon and d < laser["stats"].get("range", 280):
             i = ws.index(laser)
-            if (laser.get("charge") or 0) == 0:
+            if (laser.get("charge") or 0) == 0 and (not self.P["laser_disc"] or self.charge_ok or seen_now):
                 a["fire"][i] = True
         if not seen_now and "aim" in a and t - primary["seen"] > 1.0:
             a["aim"] = [bearing, a["aim"][1]]
@@ -553,7 +660,7 @@ class Bot:
             self.strafe_sign = self.rng.choice((-1, 1))
             self.strafe_until = self.t + self.rng.uniform(0.5, 1.3)
         ew = primary.get("weapons") or []
-        want = 75.0
+        want = self.P["range"]
         if "lightning" in ew:
             want = 85.0
         if have_ltng and "lightning" not in ew:
@@ -561,16 +668,20 @@ class Bot:
         if self.retreat:
             want = 400.0
         rad = max(-1.0, min(1.0, (d - want) / 25.0))
-        for _ in range(2):
-            s = self.strafe_sign
-            mx = -math.sin(bearing) * s + math.cos(bearing) * rad
-            my = math.cos(bearing) * s + math.sin(bearing) * rad
+        s = self.strafe_sign
+        r1 = 1.0 if rad >= 0 else -1.0
+        move = [0.0, 0.0]
+        for ss, rr, L in ((s, rad, 5.0), (-s, rad, 5.0), (s, 0.0, 3.0), (-s, 0.0, 3.0), (0, r1, 3.0), (0, -r1, 3.0)):
+            mx = -math.sin(bearing) * ss + math.cos(bearing) * rr
+            my = math.cos(bearing) * ss + math.sin(bearing) * rr
             n = math.hypot(mx, my) or 1.0
             mx, my = mx / n, my / n
-            if self.W.walkable_line(p[0], p[1], p[0] + mx * 5.0, p[1] + my * 5.0):
+            if self.W.walkable_line(p[0], p[1], p[0] + mx * L, p[1] + my * L):
+                move = [mx, my]
+                if ss:
+                    self.strafe_sign = ss
                 break
-            self.strafe_sign = -s
-        a["move"] = [mx, my]
+        a["move"] = move
         if self.retreat and me["energy"] > 30:
             a["boost"] = True
 
