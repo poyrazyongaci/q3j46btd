@@ -8,6 +8,7 @@ import sys
 import threading
 import time
 import traceback
+import zlib
 
 import numpy as np
 
@@ -61,6 +62,8 @@ P = {"retreat_hp": 0.0, "recover_hp": 0.8, "range": 75.0, "peek_max": 9.0, "clos
      "rush_r": 110.0,     # m: rush only a target this close
      "rush_hp": 0.45,     # rush only above this share of our HP
      "salt": 0,           # added to the seed of our own random choices (strafe side and timing)
+     "salt_k": 0,         # above 0: matches fall into this many groups by where and when the first random choice happens
+     "salt_map": {},      # group number (as text) to the salt that group uses instead of "salt"
      "explore": 0,        # 1: with no loot known, walk to ground we have not seen yet instead of waiting at a strong spot
      "explore_t": 200.0,  # s: explore only this early in the match
      "explore_cubes": 10,  # explore only below this many cubes
@@ -94,7 +97,7 @@ P = {"retreat_hp": 0.0, "recover_hp": 0.8, "range": 75.0, "peek_max": 9.0, "clos
 # a match where the others fight each other: only outlasting them scores
 FFA_P = {"picky": 1, "avoid": 1, "retreat_hp": 0.5, "retreat2_hp": 0.7, "quiet": 1, "heal_stay": 1, "recover_hp": 0.9,
          "bdodge": 3, "bdodge_clear": 0, "grab_laser": 120.0}
-P.update({'npc_r': 230, 'npc_hp': 0.5, 'ffa_sw': 1})
+P.update({'npc_r': 230, 'npc_hp': 0.5, 'ffa_sw': 1, 'salt_k': 8, 'salt_map': {'0': 1}})
 try:
     P.update(json.loads(os.environ.get("MECH_P") or "{}"))
 except Exception:
@@ -125,7 +128,9 @@ class Bot:
     def __init__(self, hello):
         self.cfg = hello["config"]
         self.W = World(os.path.join(HERE, "data", "map.npz"), self.cfg)
-        self.rng = random.Random(hello.get("seed", 1) + 7919 * int(P.get("salt", 0)))
+        self.seed0 = hello.get("seed", 1)
+        self._rng = None
+        self.salt_group = -1
         m = self.cfg["mech"]
         self.size_per_cube = self.cfg["cubes"].get("size_per_cube", 0.05)
         self.h_mech = m["height"]
@@ -580,6 +585,20 @@ class Bot:
                 return
 
     # ------------------------------------------------------------------ decisions
+    @property
+    def rng(self):
+        # built at the first draw, so the place and time of that draw can pick the salt
+        if self._rng is None:
+            salt = int(self.P["salt"])
+            k = int(self.P["salt_k"])
+            if k > 0:
+                p = self.me["pos"]
+                key = "%.1f,%.0f,%.0f" % (self.t, p[0], p[-1])
+                self.salt_group = zlib.crc32(key.encode()) % k
+                salt = int(self.P["salt_map"].get(str(self.salt_group), salt))
+            self._rng = random.Random(self.seed0 + 7919 * salt)
+        return self._rng
+
     def act(self, o):
         me = self.me = o["self"]
         t = self.t = o["t"]
