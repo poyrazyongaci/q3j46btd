@@ -97,8 +97,6 @@ P = {"retreat_hp": 0.0, "recover_hp": 0.8, "range": 75.0, "peek_max": 9.0, "clos
     "pile_s": 3.0,       # s: window for counting attackers
     "pile_hold": 6.0,    # s: stay broken off at least this long after the last such moment
     "pile_ffa_t": 20.0,  # s: this early, a pile-on also flips the ffa_sw switch
-    "lr": 0,             # 1: break off for lr_hold s while outnumbered and hurt (2 in sight under 55% HP, 3 under 80%)
-    "lr_hold": 1.5,      # s the break-off lasts after the last losing moment
     "quit_t": 0.0,       # s: above 0, hold fire for good from this time on (a measuring build, not for play)
     "drop_until": 0.0,   # s: above 0, leave alone every supply drop that lands later than this
     "drop_lead": -1.0,   # s: at or above 0, set off for a supply drop so as to reach it this long before it lands
@@ -122,7 +120,7 @@ COVER_P = {"picky": 1, "avoid": 1, "den": 1, "quiet": 1, "heal_stay": 1, "retrea
 # a match where the others fight each other: only outlasting them scores
 FFA_P = {"picky": 1, "avoid": 1, "retreat_hp": 0.5, "retreat2_hp": 0.7, "quiet": 1, "heal_stay": 1, "recover_hp": 0.9,
          "bdodge": 3, "bdodge_clear": 0, "grab_laser": 120.0}
-P.update({'npc_r': 230, 'npc_hp': 0.5, 'ffa_sw': 1, 'lr': 1})
+P.update({'npc_r': 230, 'npc_hp': 0.5, 'ffa_sw': 1, 'eco_t': 45, 'eco_cubes': 6, 'eco_r': 60})
 try:
     P.update(json.loads(os.environ.get("MECH_P") or "{}"))
 except Exception:
@@ -168,7 +166,6 @@ class Bot:
         self.aim_n = {}
         self.items = {}
         self.retreat = False
-        self.lr_until = -9.0
         self.hit_t = {}
         self.stick_id, self.stick_t = None, -9.0
         self.swept = False
@@ -772,20 +769,6 @@ class Bot:
             self.retreat = True
         elif hpf > self.P["recover_hp"] or (self.retreat and not self.P["heal_stay"] and t - self.last_threat_t > 7.0 and hpf > 0.6):
             self.retreat = False
-        if self.P["lr"]:
-            n = sum(1 for m in threats if t - m["seen"] < 1.0 and math.dist(m["pos"], p) < 160.0)
-            lose = (n >= 2 and hpf < 0.55) or (n >= 3 and hpf < 0.80)
-            if primary is not None:
-                thp = primary.get("hp", 1400)
-                tf = thp / max(1.0, primary.get("max_hp", 1400))
-                if hpf < 0.35 and tf > hpf + 0.10:
-                    lose = True
-                # a target that is close and nearly dead is finished first
-                if math.dist(primary["pos"], p) < 120.0 and (thp < 200 or thp < 0.5 * me["hp"]):
-                    lose = False
-            if lose:
-                self.lr_until = t + self.P["lr_hold"]
-            self.retreat = t < self.lr_until
 
         if outside or (must_go and (primary is None or out > 35.0 or t >= z["shrink_start"] - 2.0)):
             self.mode = "zone"
