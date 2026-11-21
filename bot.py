@@ -16,8 +16,8 @@ from world import World
 HERE = os.path.dirname(os.path.abspath(__file__))
 NOCOVER = bool(os.environ.get("MECH_NOCOVER"))  # A/B switch for local runs
 PREF = {"laser": 3, "lightning": 2, "mortar": 1, "gun": 0}
-UPGRADES = ["plating", "armor", "nanites", "gun_damage", "laser_damage", "gun_rate", "laser_charge",
-            "servos", "gun_mag", "gun_velocity", "gyros", "lightning_chain", "lightning_range",
+UPGRADES = ["plating", "armor", "nanites", "gun_mag", "gun_damage", "laser_damage", "gun_rate", "laser_charge",
+            "servos", "gun_velocity", "gyros", "lightning_chain", "lightning_range",
             "mortar_reload", "capacitor", "reactor", "jets", "sensors"]
 # tunables, overridden per run for local A/B tests
 P = {"retreat_hp": 0.0, "recover_hp": 0.8, "range": 75.0, "peek_max": 9.0, "close": 30.0,
@@ -31,7 +31,12 @@ P = {"retreat_hp": 0.0, "recover_hp": 0.8, "range": 75.0, "peek_max": 9.0, "clos
      "laser_disc": 1,     # 1: start a laser charge only when a shot is likely before the hold timer runs out
      "peek_charge": 6.0,  # m to the peek spot under which a charge behind cover is allowed
      "hear": 1,           # 1: with no threat known, face the last near sound
-     "glance": 1}         # 1: turn to an attacker we cannot see
+     "glance": 1,         # 1: turn to an attacker we cannot see
+     "laser_hide": 0,     # 1: break line of sight for the whole time an enemy laser can still fire at us
+     "laser_hold": 2.8,   # s a charge can be kept before the server fires it (0.75 charge + 2 hold)
+     "grab": 45.0,        # m: with an empty second slot, leave the fight line to take a weapon this close
+     "ltng_gap": 1,       # 1: back away from a lightning holder inside 65 m even when cover exists
+     "shell_dodge": 1}    # 1: run from the landing point of a mortar shell
 try:
     P.update(json.loads(os.environ.get("MECH_P") or "{}"))
 except Exception:
@@ -75,6 +80,7 @@ class Bot:
         self.snd_bearing = 0.0
         self.charge_ok = False
         self.glance_until = -9.0
+        self.lz = {}
         self.dmg_bearing = 0.0
         self.last_threat_t = -99.0
         self.strafe_sign = 1
@@ -390,6 +396,7 @@ class Bot:
         dx, dy, dz = aim_pt[0] - mu[0], aim_pt[1] - mu[1], aim_pt[2] - mu[2]
         hd = math.hypot(dx, dy)
         yaw, pitch = math.atan2(dy, dx), math.atan2(dz, hd)
+        gyaw, gpitch = yaw, pitch
         # mortar takes over the aim when it is ready and the shot is sane
         for i, w in enumerate(ws):
             if w and w["kind"] == "mortar" and m.get("kind") == "mech" and w["cooldown"] <= 0.25 and allow and visible:
@@ -399,8 +406,9 @@ class Bot:
                     if abs(adiff(me["aim"][0], yaw)) < 0.03 and abs(me["aim"][1] - pitch) < 0.03:
                         fire[i] = True
         a["aim"] = [yaw, pitch]
-        ey = abs(adiff(me["aim"][0], yaw))
-        ep = abs(me["aim"][1] - pitch)
+        # direct-fire weapons are judged on the direct line, also while the mortar arc owns the aim
+        ey = abs(adiff(me["aim"][0], gyaw))
+        ep = abs(me["aim"][1] - gpitch)
         tol = math.atan2(rad * 0.8, max(d, 1.0)) + 0.008
         aligned = ey < tol and ep < tol + 0.01
         for i, w in enumerate(ws):
@@ -546,6 +554,22 @@ class Bot:
             self.direct(a, j["x"], j["y"], stop=0.3)
             a["boost"] = p[2] < j["h"] + 1.0 and me["energy"] > 1
         self.unstick(a)
+        if self.P["shell_dodge"]:
+            g = self.cfg["weapons"]["mortar"]["gravity"]
+            for pr in o.get("projectiles", []):
+                if pr.get("kind") != "mortar" or pr.get("by") == me.get("id"):
+                    continue
+                q, v = pr["pos"], pr.get("vel") or [0.0, 0.0, 0.0]
+                tf = (v[2] + math.sqrt(v[2] * v[2] + 2.0 * g * max(0.0, q[2] - p[2]))) / g
+                dx, dy = p[0] - (q[0] + v[0] * tf), p[1] - (q[1] + v[1] * tf)
+                dd = math.hypot(dx, dy)
+                if dd < 10.0 and tf < 2.5:
+                    if dd < 0.5:
+                        dx, dy = -v[1], v[0]
+                        dd = math.hypot(dx, dy) or 1.0
+                    a["move"] = [dx / dd, dy / dd]
+                    a["boost"] = me["energy"] > 5
+                    break
         if self.P["glance"] and self.dmg_by is not None:
             if t - self.last_dmg_t < 0.15 and not any(m["id"] == self.dmg_by for m in o.get("mechs", [])):
                 self.glance_until = t + 0.9
@@ -601,11 +625,29 @@ class Bot:
         laser_soon = bool(laser and laser["cooldown"] <= 0.05)
         # is a laser pointed at me
         danger = False
-        for m in threats:
-            if m.get("charging") and t - m["seen"] < self.P["danger_mem"]:
+        if self.P["laser_hide"]:
+            # a charge shows for 0.7 s before the beam and cannot be kept past laser_hold: stay out of sight that long
+            for m in threats:
+                if t - m["seen"] < 0.15:
+                    if m.get("charging"):
+                        self.lz.setdefault(m["id"], t)
+                    else:
+                        self.lz.pop(m["id"], None)
+            for i, t0 in list(self.lz.items()):
+                m = self.known.get(i)
+                if m is None or t - t0 > 6.0:
+                    del self.lz[i]
+                    continue
                 b = math.atan2(p[1] - m["pos"][1], p[0] - m["pos"][0])
-                if abs(adiff(m["aim"][0], b)) < 0.25:
+                if t - t0 <= self.P["laser_hold"] and abs(adiff(m["aim"][0], b)) < 0.6 and math.dist(m["pos"], p) < 290.0:
                     danger = True
+        else:
+            for m in threats:
+                if m.get("charging") and t - m["seen"] < self.P["danger_mem"]:
+                    b = math.atan2(p[1] - m["pos"][1], p[0] - m["pos"][0])
+                    if abs(adiff(m["aim"][0], b)) < 0.25:
+                        danger = True
+        dodge = danger and bool(self.P["laser_hide"])
         if laser and not self.P["laser_disc"]:
             ready = laser_full or (gun_ready and not laser_soon)
         else:
@@ -617,7 +659,7 @@ class Bot:
         close = d < self.P["close"]
         if self.cover is None or t - self.cover_t > 0.3:
             c = self.find_cover(threats, primary, self.near, True)
-            if c is None and (self.retreat or d > 45.0 or self.P["far_always"]):
+            if c is None and (self.retreat or d > 45.0 or self.P["far_always"] or dodge):
                 c = self.find_cover(threats, primary, self.far, False)
             self.cover = c
             self.cover_t = t
@@ -630,13 +672,27 @@ class Bot:
         allow = not self.retreat or close or d < 70.0
         if c is not None and c["peek"] is not None:
             self.charge_ok = math.hypot(c["peek"][0] - p[0], c["peek"][1] - p[1]) <= self.P["peek_charge"]
-        if c is not None and not (close and seen_now and not self.retreat and c["peek"] is None):
+        kite = None
+        if self.P["ltng_gap"] and ltng is None:
+            for m in threats:
+                dm = math.dist(m["pos"], p)
+                if "lightning" in (m.get("weapons") or []) and t - m["seen"] < 1.0 and dm < 65.0 and (kite is None or dm < kite[0]):
+                    kite = (dm, m)
+        if kite is not None:
+            # lightning needs no aim inside 45 m: distance is the only defence
+            dm, m = kite
+            self.strafe(a, m, dm, math.atan2(m["pos"][1] - p[1], m["pos"][0] - p[0]), False)
+            if dm < 55.0 and me["energy"] > 20:
+                a["boost"] = True
+        elif c is not None and not (close and seen_now and not self.retreat and c["peek"] is None):
             spot = c["hide"] if (want_hide or c["peek"] is None) else c["peek"]
             self.spot, self.spot_t = spot, t
             if c["straight"]:
                 self.direct(a, spot[0], spot[1], stop=0.5)
+                if dodge and me["energy"] > 10:
+                    a["boost"] = True
             else:
-                self.nav(a, spot[0], spot[1], spot[2], boost=self.retreat)
+                self.nav(a, spot[0], spot[1], spot[2], boost=self.retreat or dodge)
             # no peek spot and the enemy stays away: push after weak targets only
             weak = primary.get("hp", 1e9) < 0.35 * primary.get("max_hp", 1400)
             if c["peek"] is None and not want_hide and (weak or (self.blind_since and t - self.blind_since > 4.0 and not self.must_go)):
@@ -644,9 +700,27 @@ class Bot:
                     self.nav(a, q[0], q[1], q[2])
         else:
             self.strafe(a, primary, d, bearing, ltng is not None)
+        if self.P["grab"] > 0 and ws[1] is None and not dodge and kite is None:
+            zc, zr = self.zone["center"], self.zone["radius"]
+            near = None
+            for it in self.items.values():
+                if it["type"] != "pickup" or it.get("kind") in (None, "gun"):
+                    continue
+                qq = it["pos"]
+                dd = math.hypot(qq[0] - p[0], qq[1] - p[1])
+                if dd < self.P["grab"] and math.hypot(qq[0] - zc[0], qq[1] - zc[1]) < zr - 8.0 and (near is None or dd < near[0]):
+                    near = (dd, qq)
+            if near is not None:
+                # a second weapon about doubles our damage, worth a short walk under fire
+                dd, qq = near
+                self.nav(a, qq[0], qq[1], qq[2], boost=True)
+                if dd < 6.0:
+                    self.direct(a, qq[0], qq[1], stop=0.3)
         self.shoot(a, primary, allow=allow)
         # pre-charge the laser behind cover so the peek is one beam
-        if laser and want_hide and not self.retreat and laser_soon and d < laser["stats"].get("range", 280):
+        if dodge and laser:
+            a["fire"][ws.index(laser)] = False  # a charge halves our speed, let it go and run
+        elif laser and want_hide and not self.retreat and laser_soon and d < laser["stats"].get("range", 280):
             i = ws.index(laser)
             if (laser.get("charge") or 0) == 0 and (not self.P["laser_disc"] or self.charge_ok or seen_now):
                 a["fire"][i] = True
