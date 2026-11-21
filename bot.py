@@ -65,8 +65,11 @@ P = {"retreat_hp": 0.0, "recover_hp": 0.8, "range": 75.0, "peek_max": 9.0, "clos
      "explore_t": 200.0,  # s: explore only this early in the match
      "explore_cubes": 10,  # explore only below this many cubes
      "open_boost": 0.0,   # s: outside a fight, boost every move this early in the match (0 is off)
-     "mortar_v": 9.0}     # m/s: lob a shell only at a target slower than this (walking speed is 11.7)
-P.update({'treload': 0.5})
+     "mortar_v": 9.0,     # m/s: lob a shell only at a target slower than this (walking speed is 11.7)
+     "farm": 0.0,         # m: in a fight, while the target is out of sight, shoot a crate or drone this close (0 is off)
+     "farm_s": 0.6,       # s the target must be out of sight before that
+     "farm_ammo": 4}      # rounds that must be in the magazine before that
+P.update({'farm': 70})
 try:
     P.update(json.loads(os.environ.get("MECH_P") or "{}"))
 except Exception:
@@ -855,6 +858,28 @@ class Bot:
                 a["fire"][i] = True
         if not seen_now and "aim" in a and t - primary["seen"] > 1.0:
             a["aim"] = [bearing, a["aim"][1]]
+        if self.P["farm"] > 0 and not self.retreat and not dodge and t - primary["seen"] > self.P["farm_s"] \
+                and not any(a.get("fire") or ()) and not (laser and (laser.get("charge") or 0) > 0) \
+                and ws[0] and ws[0].get("ammo", 0) >= self.P["farm_ammo"] and not ws[0].get("reload", 0):
+            # every cube is +4% HP and damage for the rest of the match, and the gun is idle anyway
+            best, bd = None, self.P["farm"]
+            for it in self.items.values():
+                if it["type"] in ("pickup", "cube"):
+                    continue
+                dd = math.dist(it["pos"], p)
+                if dd < bd:
+                    rec = dict(it)
+                    rec["kind"] = "crate"
+                    if self.can_hit(rec):
+                        best, bd = rec, dd
+            for m in self.known.values():
+                if m["kind"] != "npc" or t - m["seen"] > 0.5:
+                    continue
+                dd = math.dist(m["pos"], p)
+                if dd < bd and self.can_hit(m):
+                    best, bd = m, dd
+            if best is not None:
+                self.shoot(a, best)
 
     def strafe(self, a, primary, d, bearing, have_ltng):
         me = self.me
