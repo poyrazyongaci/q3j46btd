@@ -48,7 +48,8 @@ P = {"retreat_hp": 0.0, "recover_hp": 0.8, "range": 75.0, "peek_max": 9.0, "clos
      "finish": 0.0,       # no retreat while the target has less than this share of our own HP
      "quiet": 0,          # 1: in retreat, shoot only a close or nearly dead target, so regen can start
      "heal_stay": 0,      # 1: in retreat with nobody in sight, wait at the cover spot instead of looting
-     "laser_range": 0.0,  # m: open-ground fighting distance while we hold a laser, 0 keeps "range"
+     "kite": 0.0,         # m: on open ground, for 2 s after the target hit us, keep at least this distance while firing (0 is off)
+    "laser_range": 0.0,  # m: open-ground fighting distance while we hold a laser, 0 keeps "range"
      "ups": 0,            # 1: pick upgrades by fighting power (UPGRADES2)
      "picky": 0,          # 1: fight only mechs that hurt us, aim at us or stand close; ignore the rest
      "picky_r": 40.0,     # m: with picky, a mech this close always counts
@@ -120,7 +121,7 @@ COVER_P = {"picky": 1, "avoid": 1, "den": 1, "quiet": 1, "heal_stay": 1, "retrea
 # a match where the others fight each other: only outlasting them scores
 FFA_P = {"picky": 1, "avoid": 1, "retreat_hp": 0.5, "retreat2_hp": 0.7, "quiet": 1, "heal_stay": 1, "recover_hp": 0.9,
          "bdodge": 3, "bdodge_clear": 0, "grab_laser": 120.0}
-P.update({'npc_r': 230, 'npc_hp': 0.5, 'ffa_sw': 1, 'eco_t': 45, 'eco_cubes': 6, 'eco_r': 60})
+P.update({'npc_r': 230, 'npc_hp': 0.5, 'ffa_sw': 1, 'kite': 110})
 try:
     P.update(json.loads(os.environ.get("MECH_P") or "{}"))
 except Exception:
@@ -1119,6 +1120,8 @@ class Bot:
         want = self.P["range"]
         if self.P["laser_range"] > 0 and any(w and w["kind"] == "laser" for w in me["weapons"]):
             want = self.P["laser_range"]  # the beam hits at any range, their bullets do not
+        if self.P["kite"] > 0 and self.t - self.hit_t.get(primary.get("id"), -9.0) < 2.0:
+            want = max(want, self.P["kite"])  # the top bots back away from whoever hits them, at any HP
         if "lightning" in ew:
             want = 85.0
         if have_ltng and "lightning" not in ew:
