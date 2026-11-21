@@ -79,8 +79,11 @@ P = {"retreat_hp": 0.0, "recover_hp": 0.8, "range": 75.0, "peek_max": 9.0, "clos
      "bdodge_m": 1.0,     # m of margin round our body that counts as a hit
      "bdodge_t": 0.6,     # s: react only to a bullet that arrives within this time
      "bdodge_clear": 1,   # 1: step only when the step gets the whole body out of the bullet's path
-    "strafe_boost": 0}   # above this much energy, boost while strafing in a fight. 0: never
-P.update({'strafe_lo': 3, 'strafe_hi': 5, 'strafe_flip': 1, 'strafe_boost': 50})
+    "strafe_boost": 0,   # above this much energy, boost while strafing in a fight. 0: never
+    "eco_t": 0.0,        # s: this early, a far mech that did not hurt or aim at us does not start a fight. 0: off
+    "eco_cubes": 10,     # that rule holds only below this many cubes
+    "eco_r": 150.0}      # m: a mech closer than this always counts
+P.update({'eco_t': 200})
 try:
     P.update(json.loads(os.environ.get("MECH_P") or "{}"))
 except Exception:
@@ -592,6 +595,9 @@ class Bot:
         threats = [m for m in self.known.values() if m["kind"] == "mech" and t - m["seen"] <= self.P["mem_s"]]
         if self.P["picky"]:
             threats = [m for m in threats if m["id"] in self.hostile]
+        elif self.P["eco_t"] and t < self.P["eco_t"] and me["cubes"] < self.P["eco_cubes"]:
+            er = self.P["eco_r"]
+            threats = [m for m in threats if m["id"] in self.hostile or math.dist(m["pos"], p) < er]
         primary = None
         self.charge_ok = False
         if threats:
