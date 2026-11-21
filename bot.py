@@ -53,8 +53,14 @@ P = {"retreat_hp": 0.0, "recover_hp": 0.8, "range": 75.0, "peek_max": 9.0, "clos
      "picky_r": 40.0,     # m: with picky, a mech this close always counts
      "picky_aim": 0.2,    # rad: with picky, a mech whose aim is this near to us for 0.3 s counts
      "treload": 0.0,      # in a fight, reload under this share of the magazine once the target is out of sight
-     "treload_s": 0.5}    # s the target must be out of sight before that reload
-P.update({'range': 90.0})
+     "treload_s": 0.5,    # s the target must be out of sight before that reload
+     "laser_r": 0.0,      # m: without a laser, a laser on the ground this close outranks every other loot (0 is off)
+     "grab_laser": 0.0,   # m: in a fight without a laser, leave the fight line for a laser this close (0 is off)
+     "no_mortar": 0,      # 1: never carry a mortar, since a laser hit does 60% more to a mech that holds one
+     "rush": 0,           # 1: with lightning, close in to arc range instead of trading from cover
+     "rush_r": 110.0,     # m: rush only a target this close
+     "rush_hp": 0.45}     # rush only above this share of our HP
+P.update({'laser_r': 300.0, 'grab_laser': 60.0})
 try:
     P.update(json.loads(os.environ.get("MECH_P") or "{}"))
 except Exception:
@@ -91,6 +97,7 @@ class Bot:
         self.h_mech = m["height"]
         self.known = {}
         self.hostile = set()
+        self.rushing = False
         self.aim_n = {}
         self.items = {}
         self.retreat = False
@@ -509,9 +516,13 @@ class Bot:
         p = me["pos"]
         ws = me["weapons"]
         held = {w["kind"] for w in ws if w}
+        skip = "mortar" if self.P["no_mortar"] else None
+        if skip and ws[1] and ws[1]["kind"] == skip:
+            a["drop"] = 1
+            return
         for it in o.get("pickups", []):
             q = it["pos"]
-            if math.hypot(q[0] - p[0], q[1] - p[1]) > 3.7 or abs(q[2] - p[2]) > 3.8 or it["kind"] in held:
+            if math.hypot(q[0] - p[0], q[1] - p[1]) > 3.7 or abs(q[2] - p[2]) > 3.8 or it["kind"] in held or it["kind"] == skip:
                 continue
             if ws[1] is None:
                 a["take"] = it["id"]
@@ -740,7 +751,20 @@ class Bot:
                 dm = math.dist(m["pos"], p)
                 if "lightning" in (m.get("weapons") or []) and t - m["seen"] < 1.0 and dm < 65.0 and (kite is None or dm < kite[0]):
                     kite = (dm, m)
-        if kite is not None:
+        rush = False
+        if self.P["rush"] and ltng and kite is None and not self.retreat and not dodge:
+            # the arc does 240 damage a second with no aim and takes a laser offline: get inside its 45 m
+            ew = primary.get("weapons") or []
+            ok = d < self.P["rush_r"] and t - primary["seen"] < 1.5 and "lightning" not in ew \
+                and me["hp"] > self.P["rush_hp"] * me["max_hp"]
+            rush = ok and me["energy"] > (12.0 if self.rushing else 45.0)
+        self.rushing = rush
+        if rush:
+            if d > 36.0 or not seen_now:
+                self.nav(a, q[0], q[1], q[2], boost=d > 50.0 and me["energy"] > 60.0)
+            else:
+                self.strafe(a, primary, d, bearing, True)
+        elif kite is not None:
             # lightning needs no aim inside 45 m: distance is the only defence
             dm, m = kite
             self.strafe(a, m, dm, math.atan2(m["pos"][1] - p[1], m["pos"][0] - p[0]), False)
@@ -762,7 +786,7 @@ class Bot:
                     self.nav(a, q[0], q[1], q[2])
         else:
             self.strafe(a, primary, d, bearing, ltng is not None)
-        if not dodge and kite is None:
+        if not dodge and kite is None and not rush:
             zc, zr = self.zone["center"], self.zone["radius"]
             near = None
             if self.P["drop_r"] > 0:
@@ -774,11 +798,19 @@ class Bot:
                         near = (dd, qq, "drop")
             if near is None and self.P["grab"] > 0 and ws[1] is None and not self.retreat:
                 for it in self.items.values():
-                    if it["type"] != "pickup" or it.get("kind") in (None, "gun"):
+                    if it["type"] != "pickup" or it.get("kind") in (None, "gun") or (self.P["no_mortar"] and it.get("kind") == "mortar"):
                         continue
                     qq = it["pos"]
                     dd = math.hypot(qq[0] - p[0], qq[1] - p[1])
                     if dd < self.P["grab"] and math.hypot(qq[0] - zc[0], qq[1] - zc[1]) < zr - 8.0 and (near is None or dd < near[0]):
+                        near = (dd, qq, "weapon")
+            if near is None and self.P["grab_laser"] > 0 and laser is None and not self.retreat:
+                for it in self.items.values():
+                    if it["type"] != "pickup" or it.get("kind") != "laser":
+                        continue
+                    qq = it["pos"]
+                    dd = math.hypot(qq[0] - p[0], qq[1] - p[1])
+                    if dd < self.P["grab_laser"] and math.hypot(qq[0] - zc[0], qq[1] - zc[1]) < zr - 8.0 and (near is None or dd < near[0]):
                         near = (dd, qq, "weapon")
             if near is None and self.P["cube_r"] > 0 and not self.retreat:
                 for it in self.items.values():
@@ -872,12 +904,15 @@ class Bot:
         for it in self.items.values():
             q = it["pos"]
             d = math.hypot(q[0] - p[0], q[1] - p[1])
-            if d > 170 or not inside(q):
+            want_laser = it["type"] == "pickup" and it.get("kind") == "laser" and "laser" not in held and d < self.P["laser_r"]
+            if (d > 170 and not want_laser) or not inside(q):
                 continue
             if it["type"] == "pickup":
-                if it["kind"] in held or PREF.get(it["kind"], 0) <= cur:
+                if it["kind"] in held or PREF.get(it["kind"], 0) <= cur or (self.P["no_mortar"] and it["kind"] == "mortar"):
                     continue
                 s = d - 70.0
+                if want_laser:
+                    s = d - 70.0 - self.P["laser_r"]
             elif it["type"] == "cube":
                 s = d - 50.0
             else:
