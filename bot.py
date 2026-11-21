@@ -47,7 +47,7 @@ P = {"retreat_hp": 0.0, "recover_hp": 0.8, "range": 75.0, "peek_max": 9.0, "clos
      "picky": 0,          # 1: fight only mechs that hurt us, aim at us or stand close; ignore the rest
      "picky_r": 40.0,     # m: with picky, a mech this close always counts
      "picky_aim": 0.2}    # rad: with picky, a mech whose aim is this near to us for 0.3 s counts
-P.update({'picky': 1})
+P.update({'range': 60.0})
 try:
     P.update(json.loads(os.environ.get("MECH_P") or "{}"))
 except Exception:
