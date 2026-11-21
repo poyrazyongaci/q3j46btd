@@ -93,15 +93,19 @@ P = {"retreat_hp": 0.0, "recover_hp": 0.8, "range": 75.0, "peek_max": 9.0, "clos
     "den": 0,            # 1: with nothing to do, sit at the least exposed strong spot in the next circle, and leave crates alone
     "ffa_sw": 0,         # 1: mechs that die without our doing fight each other, so switch to the settings in FFA_P
     "ffa_n": 2,          # that many deaths we did not cause
-    "pile": 0,           # above 0: break off at once when this many different mechs hit us within pile_s
-    "pile_s": 3.0,       # s: window for counting attackers
-    "pile_hold": 6.0,    # s: stay broken off at least this long after the last such moment
-    "pile_ffa_t": 20.0,  # s: this early, a pile-on also flips the ffa_sw switch
-    "ffa_p": None}       # local tests: settings to switch to in place of FFA_P
+    "ffa_p": None,       # local tests: settings to switch to in place of FFA_P
+    "dark_k": -1,        # 0 or more: after this many kills of ours, stop hunting and switch to the settings in DARK_P
+    "dark_n": 0,         # above 0: also switch once this many mechs that came for us are within 160 m
+    "dark_t": 0.0,       # above 0: also switch at this match time in s
+    "mute": 0,           # 1: never pull a trigger. Measures how many house bots die with no help from us
+    "dark_p": None}      # local tests: settings to switch to in place of DARK_P
+# practice: house bots also die without us, so after the cheap early kills only staying alive scores
+DARK_P = {"picky": 1, "avoid": 1, "den": 1, "quiet": 1, "heal_stay": 1, "retreat_hp": 0.5, "retreat2_hp": 0.7,
+          "recover_hp": 0.9, "npc_hp": 2.0}
 # a match where the others fight each other: only outlasting them scores
 FFA_P = {"picky": 1, "avoid": 1, "retreat_hp": 0.5, "retreat2_hp": 0.7, "quiet": 1, "heal_stay": 1, "recover_hp": 0.9,
          "bdodge": 3, "bdodge_clear": 0, "grab_laser": 120.0}
-P.update({'npc_r': 230, 'npc_hp': 0.5, 'ffa_sw': 1, 'salt_k': 8, 'salt_map': {'0': 1, '1': 1}})
+P.update({'npc_r': 230, 'npc_hp': 0.5, 'dark_k': 0, 'mute': 1})
 try:
     P.update(json.loads(os.environ.get("MECH_P") or "{}"))
 except Exception:
@@ -184,9 +188,8 @@ class Bot:
         self.alive0 = None
         self.ffa = False
         self.ffa_t0 = None
-        self.atk = {}
-        self.pile_until = -1.0
-        self.pile_n = 0
+        self.dark = False
+        self.dark_t0 = -1.0
         self.av = None
         self.av_t = -9.0
         try:
@@ -278,8 +281,6 @@ class Bot:
                 self.dmg_by = e.get("by")
                 if e.get("by") is not None:
                     self.hostile.add(e["by"])
-                    if e["by"] < 100:
-                        self.atk[e["by"]] = t
             elif e["type"] == "kill" and self.P["kills"]:
                 r = self.known.pop(e.get("target"), None)
                 if r is not None:
@@ -638,13 +639,14 @@ class Bot:
                     self.P.update(self.P["ffa_p"] or FFA_P)
             else:
                 self.ffa_t0 = None
-        if self.P["pile"] and sum(1 for v in self.atk.values() if t - v < self.P["pile_s"]) >= self.P["pile"]:
-            if t > self.pile_until:
-                self.pile_n += 1
-            self.pile_until = t + self.P["pile_hold"]
-            if self.P["ffa_sw"] and not self.ffa and t < self.P["pile_ffa_t"]:
-                self.ffa = True
-                self.P.update(self.P["ffa_p"] or FFA_P)
+        if not self.dark and not self.ffa and (self.P["dark_k"] >= 0 or self.P["dark_n"] > 0 or self.P["dark_t"] > 0):
+            near = sum(1 for m in self.known.values() if m["kind"] == "mech" and m["id"] in self.hostile
+                       and t - m["seen"] < 2.0 and math.dist(m["pos"], p) < 160.0)
+            if (0 <= self.P["dark_k"] <= self.my_kills) or (0 < self.P["dark_n"] <= near) \
+                    or (0 < self.P["dark_t"] <= t):
+                self.dark = True
+                self.dark_t0 = t
+                self.P.update(self.P["dark_p"] or DARK_P)
         self.take_loot(a, o)
         self.drops_now = o.get("drops") or []
 
@@ -687,7 +689,7 @@ class Bot:
         fin = primary is not None and primary.get("hp", 1e9) < self.P["finish"] * me["hp"]
         if fin:
             self.retreat = False
-        elif hpf < rh or t < self.pile_until:
+        elif hpf < rh:
             self.retreat = True
         elif hpf > self.P["recover_hp"] or (self.retreat and not self.P["heal_stay"] and t - self.last_threat_t > 7.0 and hpf > 0.6):
             self.retreat = False
@@ -754,6 +756,8 @@ class Bot:
             mv = a.get("move", [0, 0])
             if math.hypot(mv[0], mv[1]) > 0.3:
                 a["boost"] = True
+        if self.P["mute"]:
+            a["fire"] = [False, False]
         if "aim" in a:
             self.aim = a["aim"]
         gun = next((w for w in me["weapons"] if w and w["kind"] == "gun"), None)
