@@ -64,7 +64,7 @@ P = {"retreat_hp": 0.0, "recover_hp": 0.8, "range": 75.0, "peek_max": 9.0, "clos
      "explore": 0,        # 1: with no loot known, walk to ground we have not seen yet instead of waiting at a strong spot
      "explore_t": 200.0,  # s: explore only this early in the match
      "explore_cubes": 10,  # explore only below this many cubes
-     "open_boost": 0.0,   # s: outside a fight, boost every move this early in the match (0 is off)
+     "open_boost": 4.0,   # s: outside a fight, boost every move this early in the match (0 is off). Board 5.06 to 5.27
      "mortar_v": 9.0,     # m/s: lob a shell only at a target slower than this (walking speed is 11.7)
      "farm": 0.0,         # m: in a fight, while the target is out of sight, shoot a crate or drone this close (0 is off)
      "farm_s": 0.6,       # s the target must be out of sight before that
@@ -72,7 +72,7 @@ P = {"retreat_hp": 0.0, "recover_hp": 0.8, "range": 75.0, "peek_max": 9.0, "clos
      "loot_r": 170.0,     # m: outside a fight, go for a cube, weapon or crate this close
      "npc_r": 150.0,      # m: outside a fight, hunt a drone this close (2 cubes each)
      "npc_hp": 0.7}       # hunt drones only above this share of our HP
-P.update({'retreat_hp': 0.2, 'finish': 0.5, 'quiet': 1, 'recover_hp': 0.7})
+P.update({'open_boost': 8})
 try:
     P.update(json.loads(os.environ.get("MECH_P") or "{}"))
 except Exception:
