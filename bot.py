@@ -99,11 +99,24 @@ P = {"retreat_hp": 0.0, "recover_hp": 0.8, "range": 75.0, "peek_max": 9.0, "clos
     "pile_ffa_t": 20.0,  # s: this early, a pile-on also flips the ffa_sw switch
     "quit_t": 0.0,       # s: above 0, hold fire for good from this time on (a measuring build, not for play)
     "drop_until": 0.0,   # s: above 0, leave alone every supply drop that lands later than this
+    "drop_lead": -1.0,   # s: at or above 0, set off for a supply drop so as to reach it this long before it lands
+    "drop_lead_t": 120.0,  # s: that timing holds only from this time on. Before it: 8 s early in a fight, 20 s outside one
+    "zone_late": 0.0,    # s: above 0, from this time on walk into the next circle only when the edge is close
+    "zone_late_m": 60.0,  # m: how close the edge must be for that
+    "tsel": 0,           # 1: pick the target by distance plus HP, stay on it for 2 s, and go for a mech under 30% HP
+    "tsel_hp": 0.18,     # m per HP point of the target
+    "tsel_stick": 200.0,  # m taken off the target we already shoot at
+    "tsel_low": 200.0,   # m taken off a target under 30% HP
+    "sweep_t": 0.0,      # s: above 0, from this time on walk the playable circle when no mech is in sight
+    "cover_t": 0.0,      # s: above 0, from this time on stop hunting and switch to the settings in COVER_P
     "ffa_p": None}       # local tests: settings to switch to in place of FFA_P
+# late in a match: stay out of sight, shoot back only at mechs that came for us
+COVER_P = {"picky": 1, "avoid": 1, "den": 1, "quiet": 1, "heal_stay": 1, "retreat_hp": 0.5, "retreat2_hp": 0.7,
+           "recover_hp": 0.9, "npc_hp": 2.0}
 # a match where the others fight each other: only outlasting them scores
 FFA_P = {"picky": 1, "avoid": 1, "retreat_hp": 0.5, "retreat2_hp": 0.7, "quiet": 1, "heal_stay": 1, "recover_hp": 0.9,
          "bdodge": 3, "bdodge_clear": 0, "grab_laser": 120.0}
-P.update({'npc_r': 230, 'npc_hp': 0.5, 'ffa_sw': 1, 'drop_until': 120})
+P.update({'npc_r': 230, 'npc_hp': 0.5, 'ffa_sw': 1, 'tsel': 1})
 try:
     P.update(json.loads(os.environ.get("MECH_P") or "{}"))
 except Exception:
@@ -149,6 +162,10 @@ class Bot:
         self.aim_n = {}
         self.items = {}
         self.retreat = False
+        self.hit_t = {}
+        self.stick_id, self.stick_t = None, -9.0
+        self.swept = False
+        self.covered = False
         self.last_dmg_t = -99.0
         self.dmg_by = None
         self.snd_t = -99.0
@@ -281,6 +298,7 @@ class Bot:
                 self.dmg_by = e.get("by")
                 if e.get("by") is not None:
                     self.hostile.add(e["by"])
+                    self.hit_t[e["by"]] = t
                     if e["by"] < 100:
                         self.atk[e["by"]] = t
             elif e["type"] == "kill" and self.P["kills"]:
@@ -648,6 +666,10 @@ class Bot:
             if self.P["ffa_sw"] and not self.ffa and t < self.P["pile_ffa_t"]:
                 self.ffa = True
                 self.P.update(self.P["ffa_p"] or FFA_P)
+        if 0 < self.P["cover_t"] <= t and not self.covered:
+            self.covered = True
+            self.ffa = True  # one switch per match
+            self.P.update(COVER_P)
         self.take_loot(a, o)
         self.drops_now = o.get("drops") or []
         du = self.P["drop_until"]
@@ -668,6 +690,10 @@ class Bot:
         out = dn - (nr - margin)
         must_go = out > 0 and t + out / 7.5 + 6.0 >= z["shrink_start"]
         outside = dc > z["radius"] - 4.0
+        zl = self.P["zone_late"]
+        if zl > 0 and t >= zl:
+            # the edge moves slower than we walk, so hold the fight line until it is close
+            must_go = out > 0 and dc > z["radius"] - self.P["zone_late_m"]
         self.must_go = must_go
 
         threats = [m for m in self.known.values() if m["kind"] == "mech" and t - m["seen"] <= self.P["mem_s"]]
@@ -681,6 +707,16 @@ class Bot:
         if threats:
             def score(m):
                 d = math.dist(m["pos"], p)
+                if self.P["tsel"]:
+                    hp, mx = m.get("hp", 1400), m.get("max_hp", 1400)
+                    v = d + self.P["tsel_hp"] * hp + 40.0 * (t - m["seen"])
+                    if hp <= 0.3 * mx:
+                        v -= self.P["tsel_low"]
+                    if m["id"] == self.stick_id and t - self.stick_t < 2.0:
+                        v -= self.P["tsel_stick"]
+                    if t - self.hit_t.get(m["id"], -9.0) < 4.0:
+                        v -= 40.0
+                    return v
                 return d * (0.5 + m.get("hp", 1400) / max(1.0, m.get("max_hp", 1400))) + 40.0 * (t - m["seen"])
             threats.sort(key=score)
             lb = self.P["los_bias"]
@@ -691,6 +727,7 @@ class Bot:
                 order = sorted(range(len(top)), key=lambda i: sc[i])
                 threats[:4] = [top[i] for i in order]
             primary = threats[0]
+            self.stick_id, self.stick_t = primary["id"], t
             self.last_threat_t = t
         hpf = me["hp"] / max(1.0, me["max_hp"])
         rh = self.P["retreat_hp"]
@@ -908,12 +945,15 @@ class Bot:
         if not dodge and kite is None and not rush:
             zc, zr = self.zone["center"], self.zone["radius"]
             near = None
+            dlead, dspd = 8.0, 10.0
+            if self.P["drop_lead"] >= 0 and t >= self.P["drop_lead_t"]:
+                dlead, dspd = self.P["drop_lead"], 12.0
             if self.P["drop_r"] > 0:
                 for dr in self.drops_now:
                     qq = dr["pos"]
                     dd = math.hypot(qq[0] - p[0], qq[1] - p[1])
                     if dd < self.P["drop_r"] and math.hypot(qq[0] - zc[0], qq[1] - zc[1]) < zr - 8.0 \
-                            and dr.get("lands_in", 0) < dd / 10.0 + 8.0 and (near is None or dd < near[0]):
+                            and dr.get("lands_in", 0) < dd / dspd + dlead and (near is None or dd < near[0]):
                         near = (dd, qq, "drop")
             if near is None and self.P["grab"] > 0 and ws[1] is None and not self.retreat:
                 for it in self.items.values():
@@ -1093,10 +1133,13 @@ class Bot:
                 return False
             return limit_r is None or math.hypot(q[0] - nc[0], q[1] - nc[1]) < limit_r
 
+        dlead, dspd = 20.0, 8.0
+        if self.P["drop_lead"] >= 0 and t >= self.P["drop_lead_t"]:
+            dlead, dspd = self.P["drop_lead"], 10.0
         for dr in self.drops_now:
             q = dr["pos"]
             d = math.hypot(q[0] - p[0], q[1] - p[1])
-            if d < 260 and inside(q) and dr.get("lands_in", 0) < d / 8.0 + 20.0:
+            if d < 260 and inside(q) and dr.get("lands_in", 0) < d / dspd + dlead:
                 s = d - 160.0
                 if s < bs:
                     best, bs = ("drop", dr), s
@@ -1217,6 +1260,14 @@ class Bot:
         if self.P["explore"] and self.t < self.P["explore_t"] and self.me["cubes"] < self.P["explore_cubes"] \
                 and not self.must_go and self.explore(a, nc, nr):
             return
+        if 0 < self.P["sweep_t"] <= self.t and not self.must_go:
+            if not self.swept:
+                self.swept = True
+                self.visited = set()
+                self.exp_goal = None
+            if self.explore(a, nc, nr):
+                return
+            self.visited = set()  # every point seen, start the round again
         p = self.me["pos"]
         best, bs = None, 1e9
         for f in self.forts:
