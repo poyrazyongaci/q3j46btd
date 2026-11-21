@@ -72,6 +72,7 @@ P = {"retreat_hp": 0.0, "recover_hp": 0.8, "range": 75.0, "peek_max": 9.0, "clos
      "loot_r": 170.0,     # m: outside a fight, go for a cube, weapon or crate this close
      "npc_r": 150.0,      # m: outside a fight, hunt a drone this close (2 cubes each)
      "npc_hp": 0.7,       # hunt drones only above this share of our HP
+     "npc_bias": 15.0,    # m added to a drone's distance when it competes with cubes (-50), weapons (-70) and crates (-15)
      "strafe_lo": 0.5,    # s: shortest time before the strafe side is picked again
      "strafe_hi": 1.3,    # s: longest time before that
      "strafe_flip": 0,    # 1: always reverse at that moment instead of picking a side at random
@@ -83,7 +84,7 @@ P = {"retreat_hp": 0.0, "recover_hp": 0.8, "range": 75.0, "peek_max": 9.0, "clos
     "eco_t": 0.0,        # s: this early, a far mech that did not hurt or aim at us does not start a fight. 0: off
     "eco_cubes": 10,     # that rule holds only below this many cubes
     "eco_r": 150.0}      # m: a mech closer than this always counts
-P.update({'npc_r': 230, 'npc_hp': 0.5, 'salt': 3})
+P.update({'npc_r': 230, 'npc_hp': 0.5, 'bdodge': 3, 'bdodge_clear': 0})
 try:
     P.update(json.loads(os.environ.get("MECH_P") or "{}"))
 except Exception:
@@ -1043,8 +1044,8 @@ class Bot:
                 if m["kind"] != "npc":
                     continue
                 d = math.dist(m["pos"], p)
-                if d < self.P["npc_r"] and inside(m["pos"]) and d + 15.0 < bs:
-                    best, bs = ("npc", m), d + 15.0
+                if d < self.P["npc_r"] and inside(m["pos"]) and d + self.P["npc_bias"] < bs:
+                    best, bs = ("npc", m), d + self.P["npc_bias"]
         if best is None:
             self.hold(a, nc, nr, dn)
             return
