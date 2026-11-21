@@ -51,8 +51,10 @@ P = {"retreat_hp": 0.0, "recover_hp": 0.8, "range": 75.0, "peek_max": 9.0, "clos
      "ups": 0,            # 1: pick upgrades by fighting power (UPGRADES2)
      "picky": 0,          # 1: fight only mechs that hurt us, aim at us or stand close; ignore the rest
      "picky_r": 40.0,     # m: with picky, a mech this close always counts
-     "picky_aim": 0.2}    # rad: with picky, a mech whose aim is this near to us for 0.3 s counts
-P.update({'ups': 1})
+     "picky_aim": 0.2,    # rad: with picky, a mech whose aim is this near to us for 0.3 s counts
+     "treload": 0.0,      # in a fight, reload under this share of the magazine once the target is out of sight
+     "treload_s": 0.5}    # s the target must be out of sight before that reload
+P.update({'range': 90.0})
 try:
     P.update(json.loads(os.environ.get("MECH_P") or "{}"))
 except Exception:
@@ -639,7 +641,8 @@ class Bot:
             self.aim = a["aim"]
         gun = next((w for w in me["weapons"] if w and w["kind"] == "gun"), None)
         if gun and gun.get("reload", 0) == 0 and not a["fire"][0]:
-            if gun.get("ammo", 99) == 0 or (primary is None and gun.get("ammo", 99) < gun["stats"]["mag"] * 0.6):
+            blind = self.mode == "fight" and self.blind_since is not None and t - self.blind_since > self.P["treload_s"]
+            if gun.get("ammo", 99) == 0 or (primary is None and gun.get("ammo", 99) < gun["stats"]["mag"] * 0.6)                     or (blind and gun.get("ammo", 99) < gun["stats"]["mag"] * self.P["treload"]):
                 a["reload"] = True
         return a
 
