@@ -71,8 +71,14 @@ P = {"retreat_hp": 0.0, "recover_hp": 0.8, "range": 75.0, "peek_max": 9.0, "clos
      "farm_ammo": 4,      # rounds that must be in the magazine before that
      "loot_r": 170.0,     # m: outside a fight, go for a cube, weapon or crate this close
      "npc_r": 150.0,      # m: outside a fight, hunt a drone this close (2 cubes each)
-     "npc_hp": 0.7}       # hunt drones only above this share of our HP
-P.update({'open_boost': 12})
+     "npc_hp": 0.7,       # hunt drones only above this share of our HP
+     "strafe_lo": 0.5,    # s: shortest time before the strafe side is picked again
+     "strafe_hi": 1.3,    # s: longest time before that
+     "strafe_flip": 0,    # 1: always reverse at that moment instead of picking a side at random
+     "bdodge": 0,         # step out of a gun bullet's path. 1: while strafing, 2: also outside a fight, 3: always
+     "bdodge_m": 1.0,     # m of margin round our body that counts as a hit
+     "bdodge_t": 0.6}     # s: react only to a bullet that arrives within this time
+P.update({'bdodge': 3})
 try:
     P.update(json.loads(os.environ.get("MECH_P") or "{}"))
 except Exception:
@@ -128,6 +134,8 @@ class Bot:
         self.last_threat_t = -99.0
         self.strafe_sign = 1
         self.strafe_until = 0.0
+        self.strafe_t = -1.0
+        self.dodges = 0
         self.stuck = 0
         self.unstick_until = 0.0
         self.unstick_dir = (0.0, 0.0)
@@ -655,6 +663,10 @@ class Bot:
                     a["move"] = [dx / dd, dy / dd]
                     a["boost"] = me["energy"] > 5
                     break
+        bd = self.P["bdodge"]
+        if bd and self.jet is None and t >= self.unstick_until and not a.get("jump") \
+                and (bd >= 3 or self.strafe_t == t or (bd >= 2 and self.mode != "fight")):
+            self.sidestep(a, o)
         if self.P["glance"] and self.dmg_by is not None:
             if t - self.last_dmg_t < 0.15 and not any(m["id"] == self.dmg_by for m in o.get("mechs", [])):
                 self.glance_until = t + 0.9
@@ -884,12 +896,67 @@ class Bot:
             if best is not None:
                 self.shoot(a, best)
 
+    def sidestep(self, a, o):
+        """Step out of the path of the gun bullet that would hit us soonest. The shooter led our old velocity."""
+        me = self.me
+        p = me["pos"]
+        mv = me.get("vel") or [0.0, 0.0, 0.0]
+        st = me.get("stats") or {}
+        acc = float(self.cfg.get("mech", {}).get("ground_accel", 58.5))
+        vw = float(st.get("walk_speed", 11.7))
+        vb = float(st.get("boost_speed", 19.5))
+        size = 1.0 + 0.05 * me.get("cubes", 0)  # every cube makes the body 5% bigger
+        rad = 2.5 * size + self.P["bdodge_m"]
+        best = None
+        for pr in o.get("projectiles", []):
+            if pr.get("kind") not in ("gun", "npc") or pr.get("by") == me.get("id"):
+                continue
+            q, v = pr["pos"], pr.get("vel") or [0.0, 0.0, 0.0]
+            hv = math.hypot(v[0], v[1])
+            if hv < 30.0:
+                continue
+            rx, ry, rz = p[0] - q[0], p[1] - q[1], p[2] + 4.5 * size - q[2]
+            ux, uy, uz = v[0] - mv[0], v[1] - mv[1], v[2] - mv[2]
+            uu = ux * ux + uy * uy + uz * uz
+            tc = (rx * ux + ry * uy + rz * uz) / uu
+            if tc <= 0.0 or tc > self.P["bdodge_t"]:
+                continue
+            mx, my, mz = rx - ux * tc, ry - uy * tc, rz - uz * tc
+            if abs(mz) > 4.5 * size + 1.0:
+                continue
+            nx, ny = -v[1] / hv, v[0] / hv
+            ml = mx * nx + my * ny
+            if abs(ml) > rad:
+                continue
+            if best is None or tc < best[0]:
+                best = (tc, ml, nx, ny)
+        if best is None:
+            return False
+        tc, ml, nx, ny = best
+        vl = mv[0] * nx + mv[1] * ny
+        pick = None
+        for s in (1, -1):
+            for boost in ((False, True) if me["energy"] > 15.0 else (False,)):
+                dv = s * (vb if boost else vw) - vl
+                tr = abs(dv) / acc
+                d = 0.5 * acc * tc * tc * (1 if dv > 0 else -1) if tc <= tr else dv * (tc - 0.5 * tr)
+                gain = abs(ml + d) - (0.4 if boost else 0.0)
+                if (pick is None or gain > pick[0]) and self.W.walkable_line(p[0], p[1], p[0] + nx * s * 4.0, p[1] + ny * s * 4.0):
+                    pick = (gain, s, boost)
+        if pick is None or pick[0] < abs(ml) + 0.3:
+            return False
+        a["move"] = [nx * pick[1], ny * pick[1]]
+        a["boost"] = pick[2]
+        self.dodges += 1
+        return True
+
     def strafe(self, a, primary, d, bearing, have_ltng):
         me = self.me
         p = me["pos"]
+        self.strafe_t = self.t
         if self.t > self.strafe_until:
-            self.strafe_sign = self.rng.choice((-1, 1))
-            self.strafe_until = self.t + self.rng.uniform(0.5, 1.3)
+            self.strafe_sign = -self.strafe_sign if self.P["strafe_flip"] else self.rng.choice((-1, 1))
+            self.strafe_until = self.t + self.rng.uniform(self.P["strafe_lo"], self.P["strafe_hi"])
         ew = primary.get("weapons") or []
         want = self.P["range"]
         if self.P["laser_range"] > 0 and any(w and w["kind"] == "laser" for w in me["weapons"]):
