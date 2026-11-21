@@ -101,7 +101,7 @@ P = {"retreat_hp": 0.0, "recover_hp": 0.8, "range": 75.0, "peek_max": 9.0, "clos
 # a match where the others fight each other: only outlasting them scores
 FFA_P = {"picky": 1, "avoid": 1, "retreat_hp": 0.5, "retreat2_hp": 0.7, "quiet": 1, "heal_stay": 1, "recover_hp": 0.9,
          "bdodge": 3, "bdodge_clear": 0, "grab_laser": 120.0}
-P.update({'npc_r': 230, 'npc_hp': 0.5, 'ffa_sw': 1, 'salt_k': 8, 'salt_map': {'2': 1}})
+P.update({'npc_r': 230, 'npc_hp': 0.5, 'ffa_sw': 1, 'salt_k': 8, 'salt_map': {'3': 1}})
 try:
     P.update(json.loads(os.environ.get("MECH_P") or "{}"))
 except Exception:
