@@ -80,7 +80,7 @@ P = {"retreat_hp": 0.0, "recover_hp": 0.8, "range": 75.0, "peek_max": 9.0, "clos
      "bdodge_t": 0.6,     # s: react only to a bullet that arrives within this time
      "bdodge_clear": 1,   # 1: step only when the step gets the whole body out of the bullet's path
     "strafe_boost": 0}   # above this much energy, boost while strafing in a fight. 0: never
-P.update({'strafe_boost': 50})
+P.update({'bdodge': 3, 'salt': 1})
 try:
     P.update(json.loads(os.environ.get("MECH_P") or "{}"))
 except Exception:
