@@ -93,11 +93,18 @@ P = {"retreat_hp": 0.0, "recover_hp": 0.8, "range": 75.0, "peek_max": 9.0, "clos
     "den": 0,            # 1: with nothing to do, sit at the least exposed strong spot in the next circle, and leave crates alone
     "ffa_sw": 0,         # 1: mechs that die without our doing fight each other, so switch to the settings in FFA_P
     "ffa_n": 2,          # that many deaths we did not cause
-    "ffa_p": None}       # local tests: settings to switch to in place of FFA_P
+    "ffa_p": None,       # local tests: settings to switch to in place of FFA_P
+    "dark_k": -1,        # 0 or more: after this many kills of ours, stop hunting and switch to the settings in DARK_P
+    "dark_n": 0,         # above 0: also switch once this many mechs that came for us are within 160 m
+    "dark_t": 0.0,       # above 0: also switch at this match time in s
+    "dark_p": None}      # local tests: settings to switch to in place of DARK_P
+# practice: house bots also die without us, so after the cheap early kills only staying alive scores
+DARK_P = {"picky": 1, "avoid": 1, "den": 1, "quiet": 1, "heal_stay": 1, "retreat_hp": 0.5, "retreat2_hp": 0.7,
+          "recover_hp": 0.9, "npc_hp": 2.0}
 # a match where the others fight each other: only outlasting them scores
 FFA_P = {"picky": 1, "avoid": 1, "retreat_hp": 0.5, "retreat2_hp": 0.7, "quiet": 1, "heal_stay": 1, "recover_hp": 0.9,
          "bdodge": 3, "bdodge_clear": 0, "grab_laser": 120.0}
-P.update({'npc_r': 230, 'npc_hp': 0.5, 'ffa_sw': 1, 'salt_k': 8, 'salt_map': {'0': 1}})
+P.update({'npc_r': 230, 'npc_hp': 0.5, 'dark_k': 0})
 try:
     P.update(json.loads(os.environ.get("MECH_P") or "{}"))
 except Exception:
@@ -180,6 +187,8 @@ class Bot:
         self.alive0 = None
         self.ffa = False
         self.ffa_t0 = None
+        self.dark = False
+        self.dark_t0 = -1.0
         self.av = None
         self.av_t = -9.0
         try:
@@ -629,6 +638,14 @@ class Bot:
                     self.P.update(self.P["ffa_p"] or FFA_P)
             else:
                 self.ffa_t0 = None
+        if not self.dark and not self.ffa and (self.P["dark_k"] >= 0 or self.P["dark_n"] > 0 or self.P["dark_t"] > 0):
+            near = sum(1 for m in self.known.values() if m["kind"] == "mech" and m["id"] in self.hostile
+                       and t - m["seen"] < 2.0 and math.dist(m["pos"], p) < 160.0)
+            if (0 <= self.P["dark_k"] <= self.my_kills) or (0 < self.P["dark_n"] <= near) \
+                    or (0 < self.P["dark_t"] <= t):
+                self.dark = True
+                self.dark_t0 = t
+                self.P.update(self.P["dark_p"] or DARK_P)
         self.take_loot(a, o)
         self.drops_now = o.get("drops") or []
 
