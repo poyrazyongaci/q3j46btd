@@ -36,7 +36,9 @@ P = {"retreat_hp": 0.0, "recover_hp": 0.8, "range": 75.0, "peek_max": 9.0, "clos
      "laser_hold": 2.8,   # s a charge can be kept before the server fires it (0.75 charge + 2 hold)
      "grab": 45.0,        # m: with an empty second slot, leave the fight line to take a weapon this close
      "ltng_gap": 1,       # 1: back away from a lightning holder inside 65 m even when cover exists
-     "shell_dodge": 1}    # 1: run from the landing point of a mortar shell
+     "shell_dodge": 1,    # 1: run from the landing point of a mortar shell
+     "cube_r": 120.0,     # m: in a fight, walk onto power cubes this close (+4% HP and damage each, upgrades)
+     "drop_r": 300.0}     # m: in a fight, go and stand in a supply drop ring this close (full HP, 3 cubes)
 try:
     P.update(json.loads(os.environ.get("MECH_P") or "{}"))
 except Exception:
@@ -82,6 +84,7 @@ class Bot:
         self.glance_until = -9.0
         self.lz = {}
         self.dmg_bearing = 0.0
+        self.drops_now = []
         self.last_threat_t = -99.0
         self.strafe_sign = 1
         self.strafe_until = 0.0
@@ -176,7 +179,10 @@ class Bot:
                 self.dmg_bearing = e["bearing"]
                 self.dmg_by = e.get("by")
             elif e["type"] == "kill" and self.P["kills"]:
-                self.known.pop(e.get("target"), None)
+                r = self.known.pop(e.get("target"), None)
+                if r is not None:
+                    # the dead mech left its cubes where it stood, also when we cannot see the spot
+                    self.items["k%s" % r["id"]] = {"id": "k%s" % r["id"], "type": "cube", "pos": list(r["pos"]), "kind": None, "seen": t}
             elif e["type"] == "took":
                 self.items.pop(e.get("id"), None)
 
@@ -502,6 +508,7 @@ class Bot:
                 self.jet = None
         self.remember(o)
         self.take_loot(a, o)
+        self.drops_now = o.get("drops") or []
 
         nc, nr = z["next_center"], z["next_radius"]
         dn = math.hypot(p[0] - nc[0], p[1] - nc[1])
@@ -700,22 +707,44 @@ class Bot:
                     self.nav(a, q[0], q[1], q[2])
         else:
             self.strafe(a, primary, d, bearing, ltng is not None)
-        if self.P["grab"] > 0 and ws[1] is None and not dodge and kite is None:
+        if not dodge and kite is None:
             zc, zr = self.zone["center"], self.zone["radius"]
             near = None
-            for it in self.items.values():
-                if it["type"] != "pickup" or it.get("kind") in (None, "gun"):
-                    continue
-                qq = it["pos"]
-                dd = math.hypot(qq[0] - p[0], qq[1] - p[1])
-                if dd < self.P["grab"] and math.hypot(qq[0] - zc[0], qq[1] - zc[1]) < zr - 8.0 and (near is None or dd < near[0]):
-                    near = (dd, qq)
+            if self.P["drop_r"] > 0:
+                for dr in self.drops_now:
+                    qq = dr["pos"]
+                    dd = math.hypot(qq[0] - p[0], qq[1] - p[1])
+                    if dd < self.P["drop_r"] and math.hypot(qq[0] - zc[0], qq[1] - zc[1]) < zr - 8.0 \
+                            and dr.get("lands_in", 0) < dd / 10.0 + 8.0 and (near is None or dd < near[0]):
+                        near = (dd, qq, "drop")
+            if near is None and self.P["grab"] > 0 and ws[1] is None:
+                for it in self.items.values():
+                    if it["type"] != "pickup" or it.get("kind") in (None, "gun"):
+                        continue
+                    qq = it["pos"]
+                    dd = math.hypot(qq[0] - p[0], qq[1] - p[1])
+                    if dd < self.P["grab"] and math.hypot(qq[0] - zc[0], qq[1] - zc[1]) < zr - 8.0 and (near is None or dd < near[0]):
+                        near = (dd, qq, "weapon")
+            if near is None and self.P["cube_r"] > 0:
+                for it in self.items.values():
+                    if it["type"] != "cube":
+                        continue
+                    qq = it["pos"]
+                    dd = math.hypot(qq[0] - p[0], qq[1] - p[1])
+                    if dd < self.P["cube_r"] and math.hypot(qq[0] - zc[0], qq[1] - zc[1]) < zr - 8.0 and (near is None or dd < near[0]):
+                        near = (dd, qq, "cube")
             if near is not None:
-                # a second weapon about doubles our damage, worth a short walk under fire
-                dd, qq = near
-                self.nav(a, qq[0], qq[1], qq[2], boost=True)
-                if dd < 6.0:
-                    self.direct(a, qq[0], qq[1], stop=0.3)
+                # a second weapon about doubles our damage, a cube is +4% HP and damage, a drop is a full repair:
+                # each is worth a walk under fire, and the torso keeps shooting on the way
+                dd, qq, what = near
+                if what == "drop" and dd < 6.0:
+                    # stay inside the ring but keep moving
+                    w = self.t * 1.6
+                    self.direct(a, qq[0] + 3.5 * math.cos(w), qq[1] + 3.5 * math.sin(w), stop=0.3)
+                else:
+                    self.nav(a, qq[0], qq[1], qq[2], boost=True)
+                    if dd < 6.0:
+                        self.direct(a, qq[0], qq[1], stop=0.3)
         self.shoot(a, primary, allow=allow)
         # pre-charge the laser behind cover so the peek is one beam
         if dodge and laser:
