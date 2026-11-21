@@ -109,6 +109,8 @@ P = {"retreat_hp": 0.0, "recover_hp": 0.8, "range": 75.0, "peek_max": 9.0, "clos
     "tsel_low": 200.0,   # m taken off a target under 30% HP
     "sweep_t": 0.0,      # s: above 0, from this time on walk the playable circle when no mech is in sight
     "cover_t": 0.0,      # s: above 0, from this time on stop hunting and switch to the settings in COVER_P
+    "cover_k": -1,       # 0 or more: make that switch after this many kills of ours
+    "hide_t": 0.0,       # s: above 0, play the COVER_P settings until this time, then the normal ones (a measuring build)
     "ffa_p": None}       # local tests: settings to switch to in place of FFA_P
 # late in a match: stay out of sight, shoot back only at mechs that came for us
 COVER_P = {"picky": 1, "avoid": 1, "den": 1, "quiet": 1, "heal_stay": 1, "retreat_hp": 0.5, "retreat2_hp": 0.7,
@@ -116,7 +118,7 @@ COVER_P = {"picky": 1, "avoid": 1, "den": 1, "quiet": 1, "heal_stay": 1, "retrea
 # a match where the others fight each other: only outlasting them scores
 FFA_P = {"picky": 1, "avoid": 1, "retreat_hp": 0.5, "retreat2_hp": 0.7, "quiet": 1, "heal_stay": 1, "recover_hp": 0.9,
          "bdodge": 3, "bdodge_clear": 0, "grab_laser": 120.0}
-P.update({'npc_r': 230, 'npc_hp': 0.5, 'ffa_sw': 1, 'drop_lead': 0})
+P.update({'npc_r': 230, 'npc_hp': 0.5, 'ffa_sw': 1, 'cover_k': 8})
 try:
     P.update(json.loads(os.environ.get("MECH_P") or "{}"))
 except Exception:
@@ -166,6 +168,8 @@ class Bot:
         self.stick_id, self.stick_t = None, -9.0
         self.swept = False
         self.covered = False
+        self.hide = 0
+        self.hide_keep = {}
         self.last_dmg_t = -99.0
         self.dmg_by = None
         self.snd_t = -99.0
@@ -666,7 +670,15 @@ class Bot:
             if self.P["ffa_sw"] and not self.ffa and t < self.P["pile_ffa_t"]:
                 self.ffa = True
                 self.P.update(self.P["ffa_p"] or FFA_P)
-        if 0 < self.P["cover_t"] <= t and not self.covered:
+        if self.P["hide_t"] > 0:
+            if self.hide == 0:
+                self.hide = 1
+                self.hide_keep = {k: self.P[k] for k in COVER_P}
+                self.P.update(COVER_P)
+            elif self.hide == 1 and t >= self.P["hide_t"]:
+                self.hide = 2
+                self.P.update(self.hide_keep)
+        if not self.covered and (0 < self.P["cover_t"] <= t or 0 <= self.P["cover_k"] <= self.my_kills):
             self.covered = True
             self.ffa = True  # one switch per match
             self.P.update(COVER_P)
