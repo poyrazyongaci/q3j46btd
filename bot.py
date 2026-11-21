@@ -26,7 +26,7 @@ P = {"retreat_hp": 0.0, "recover_hp": 0.8, "range": 75.0, "peek_max": 9.0, "clos
      "crowd_r": 120.0,
      "los_bias": 50.0,     # m added to the target score of an enemy we cannot hit right now
      "far_always": 0,     # 1: search far cover whenever no near cover exists
-     "mem_s": 2.0,        # s a mech stays a threat after the server stops listing it (the server already tracks 5 s)
+     "mem_s": 1.0,        # s a mech stays a threat after the server stops listing it (the server already tracks 5 s)
      "kills": 1,          # 1: forget a mech the moment the server reports our kill
      "laser_disc": 1,     # 1: start a laser charge only when a shot is likely before the hold timer runs out
      "peek_charge": 6.0,  # m to the peek spot under which a charge behind cover is allowed
@@ -44,7 +44,7 @@ P = {"retreat_hp": 0.0, "recover_hp": 0.8, "range": 75.0, "peek_max": 9.0, "clos
      "quiet": 0,          # 1: in retreat, shoot only a close or nearly dead target, so regen can start
      "heal_stay": 0,      # 1: in retreat with nobody in sight, wait at the cover spot instead of looting
      "laser_range": 0.0}  # m: open-ground fighting distance while we hold a laser, 0 keeps "range"
-P.update({'mem_s': 1.0})
+P.update({'laser_range': 145.0})
 try:
     P.update(json.loads(os.environ.get("MECH_P") or "{}"))
 except Exception:
