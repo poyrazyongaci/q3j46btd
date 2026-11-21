@@ -83,8 +83,17 @@ P = {"retreat_hp": 0.0, "recover_hp": 0.8, "range": 75.0, "peek_max": 9.0, "clos
     "strafe_boost": 0,   # above this much energy, boost while strafing in a fight. 0: never
     "eco_t": 0.0,        # s: this early, a far mech that did not hurt or aim at us does not start a fight. 0: off
     "eco_cubes": 10,     # that rule holds only below this many cubes
-    "eco_r": 150.0}      # m: a mech closer than this always counts
-P.update({'npc_r': 230, 'npc_hp': 0.5, 'bdodge': 3, 'bdodge_clear': 0, 'grab_laser': 120, 'no_mortar': 1})
+    "eco_r": 150.0,      # m: a mech closer than this always counts
+    "avoid": 0,          # 1: fight only mechs that came for us, and get out of sight of every other mech
+    "avoid_r": 320.0,    # m: a mech nearer than this is worth hiding from
+    "avoid_mem": 6.0,    # s to stay hidden after the last sighting
+    "den": 0,            # 1: with nothing to do, sit at the least exposed strong spot in the next circle, and leave crates alone
+    "ffa_sw": 0,         # 1: mechs that die without our doing fight each other, so switch to the settings in FFA_P
+    "ffa_n": 2,          # that many deaths we did not cause
+    "ffa_p": None}       # local tests: settings to switch to in place of FFA_P
+# a match where the others fight each other: only outlasting them scores
+FFA_P = {"picky": 1, "avoid": 1, "retreat_hp": 0.5, "retreat2_hp": 0.7, "quiet": 1, "heal_stay": 1, "recover_hp": 0.9}
+P.update({'npc_r': 230, 'npc_hp': 0.5, 'salt': 4})
 try:
     P.update(json.loads(os.environ.get("MECH_P") or "{}"))
 except Exception:
@@ -161,6 +170,12 @@ class Bot:
         self.far = ring(78, 6.0)
         self.aim = [0.0, 0.0]
         self.blind_since = None
+        self.my_kills = 0
+        self.alive0 = None
+        self.ffa = False
+        self.ffa_t0 = None
+        self.av = None
+        self.av_t = -9.0
         try:
             with open(os.path.join(HERE, "data", "positions.json")) as f:
                 self.forts = json.load(f)
@@ -242,6 +257,8 @@ class Bot:
                 self.snd_t = t - (sd.get("age") or 0.0)
                 self.snd_bearing = sd["bearing"]
         for e in o.get("events", []):
+            if e["type"] == "kill":
+                self.my_kills += 1
             if e["type"] == "damaged" and e.get("bearing") is not None:
                 self.last_dmg_t = t
                 self.dmg_bearing = e["bearing"]
@@ -581,6 +598,17 @@ class Bot:
                     self.W.penalize(j["node"], 15.0)  # the jump did not get us up there
                 self.jet = None
         self.remember(o)
+        if self.alive0 is None:
+            self.alive0 = o.get("alive", 16)
+        if self.P["ffa_sw"] and not self.ffa:
+            if self.alive0 - o.get("alive", self.alive0) - self.my_kills >= self.P["ffa_n"]:
+                if self.ffa_t0 is None:
+                    self.ffa_t0 = t
+                elif t - self.ffa_t0 > 1.0:
+                    self.ffa = True
+                    self.P.update(self.P["ffa_p"] or FFA_P)
+            else:
+                self.ffa_t0 = None
         self.take_loot(a, o)
         self.drops_now = o.get("drops") or []
 
@@ -594,7 +622,7 @@ class Bot:
         self.must_go = must_go
 
         threats = [m for m in self.known.values() if m["kind"] == "mech" and t - m["seen"] <= self.P["mem_s"]]
-        if self.P["picky"]:
+        if self.P["picky"] or self.P["avoid"]:
             threats = [m for m in threats if m["id"] in self.hostile]
         elif self.P["eco_t"] and t < self.P["eco_t"] and me["cubes"] < self.P["eco_cubes"]:
             er = self.P["eco_r"]
@@ -638,6 +666,8 @@ class Bot:
         elif primary is not None:
             self.mode = "fight"
             self.fight(a, primary, threats)
+        elif self.P["avoid"] and self.avoid(a):
+            self.mode = "avoid"
         elif self.retreat and self.P["heal_stay"] and self.spot is not None and t - self.spot_t < 40.0:
             # hurt and out of sight: regen gives 45 HP a second after 5 quiet seconds, so wait behind the cover
             self.mode = "heal"
@@ -1035,6 +1065,8 @@ class Bot:
                     s = d - 70.0 - self.P["laser_r"]
             elif it["type"] == "cube":
                 s = d - 50.0
+            elif self.P["den"]:
+                continue
             else:
                 s = d - 15.0
             if s < bs:
@@ -1071,6 +1103,33 @@ class Bot:
             else:
                 self.nav(a, q[0], q[1], q[2])
                 self.look(a)
+
+    def avoid(self, a):
+        """Mechs that have not come for us are near: get out of their sight and stay there. False with nobody near or no cover."""
+        t = self.t
+        p = self.me["pos"]
+        ws = [m for m in self.known.values() if m["kind"] == "mech" and t - m["seen"] <= self.P["avoid_mem"]
+              and math.dist(m["pos"], p) < self.P["avoid_r"]]
+        if not ws:
+            self.av = None
+            return False
+        ws.sort(key=lambda m: math.dist(m["pos"], p))
+        if self.av is None or t - self.av_t > 0.5:
+            self.av = self.find_cover(ws, None, self.near, True) or self.find_cover(ws, None, self.far, False)
+            self.av_t = t
+        c = self.av
+        if c is None:
+            return False
+        s = c["hide"]
+        self.spot, self.spot_t = s, t
+        if math.hypot(s[0] - p[0], s[1] - p[1]) > 1.5:
+            if c["straight"]:
+                self.direct(a, s[0], s[1], stop=0.5)
+            else:
+                self.nav(a, s[0], s[1], s[2], boost=math.dist(ws[0]["pos"], p) < 120.0)
+        q = ws[0]["pos"]
+        self.look(a, math.atan2(q[1] - p[1], q[0] - p[0]))
+        return True
 
     def explore(self, a, nc, nr):
         """Walk to the nearest 100 m grid point we have not been near. Returns False when none is left."""
@@ -1117,6 +1176,8 @@ class Bot:
             if math.hypot(f["x"] - nc[0], f["y"] - nc[1]) > max(0.0, nr - 12.0):
                 continue
             s = math.hypot(f["x"] - p[0], f["y"] - p[1]) + 300.0 * f.get("exposure", 0.5)
+            if self.P["den"]:
+                s = 0.4 * math.hypot(f["x"] - p[0], f["y"] - p[1]) + 900.0 * f.get("exposure", 0.5)
             if s < bs:
                 best, bs = f, s
         if best is not None:
