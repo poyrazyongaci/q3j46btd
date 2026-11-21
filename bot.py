@@ -44,7 +44,7 @@ P = {"retreat_hp": 0.0, "recover_hp": 0.8, "range": 75.0, "peek_max": 9.0, "clos
      "quiet": 0,          # 1: in retreat, shoot only a close or nearly dead target, so regen can start
      "heal_stay": 0,      # 1: in retreat with nobody in sight, wait at the cover spot instead of looting
      "laser_range": 0.0}  # m: open-ground fighting distance while we hold a laser, 0 keeps "range"
-P.update({'retreat_hp': 0.4, 'retreat2_hp': 0.5, 'finish': 0.5, 'recover_hp': 0.75, 'heal_stay': 1})
+P.update({'mem_s': 4.0})
 try:
     P.update(json.loads(os.environ.get("MECH_P") or "{}"))
 except Exception:
