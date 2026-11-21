@@ -98,11 +98,12 @@ P = {"retreat_hp": 0.0, "recover_hp": 0.8, "range": 75.0, "peek_max": 9.0, "clos
     "pile_hold": 6.0,    # s: stay broken off at least this long after the last such moment
     "pile_ffa_t": 20.0,  # s: this early, a pile-on also flips the ffa_sw switch
     "quit_t": 0.0,       # s: above 0, hold fire for good from this time on (a measuring build, not for play)
+    "drop_until": 0.0,   # s: above 0, leave alone every supply drop that lands later than this
     "ffa_p": None}       # local tests: settings to switch to in place of FFA_P
 # a match where the others fight each other: only outlasting them scores
 FFA_P = {"picky": 1, "avoid": 1, "retreat_hp": 0.5, "retreat2_hp": 0.7, "quiet": 1, "heal_stay": 1, "recover_hp": 0.9,
          "bdodge": 3, "bdodge_clear": 0, "grab_laser": 120.0}
-P.update({'npc_r': 230, 'npc_hp': 0.5, 'ffa_sw': 1, 'quit_t': 240})
+P.update({'npc_r': 230, 'npc_hp': 0.5, 'ffa_sw': 1, 'drop_until': 120})
 try:
     P.update(json.loads(os.environ.get("MECH_P") or "{}"))
 except Exception:
@@ -157,6 +158,7 @@ class Bot:
         self.lz = {}
         self.dmg_bearing = 0.0
         self.drops_now = []
+        self.drop_land = {}
         self.last_threat_t = -99.0
         self.strafe_sign = 1
         self.strafe_until = 0.0
@@ -648,6 +650,16 @@ class Bot:
                 self.P.update(self.P["ffa_p"] or FFA_P)
         self.take_loot(a, o)
         self.drops_now = o.get("drops") or []
+        du = self.P["drop_until"]
+        if du > 0:
+            keep = []
+            for dr in self.drops_now:
+                k = (round(dr["pos"][0]), round(dr["pos"][1]))
+                if k not in self.drop_land:
+                    self.drop_land[k] = t + (dr.get("lands_in", 0) or 0)
+                if self.drop_land[k] <= du:
+                    keep.append(dr)
+            self.drops_now = keep
 
         nc, nr = z["next_center"], z["next_radius"]
         dn = math.hypot(p[0] - nc[0], p[1] - nc[1])
@@ -1081,7 +1093,7 @@ class Bot:
                 return False
             return limit_r is None or math.hypot(q[0] - nc[0], q[1] - nc[1]) < limit_r
 
-        for dr in o.get("drops", []):
+        for dr in self.drops_now:
             q = dr["pos"]
             d = math.hypot(q[0] - p[0], q[1] - p[1])
             if d < 260 and inside(q) and dr.get("lands_in", 0) < d / 8.0 + 20.0:
