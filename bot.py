@@ -78,8 +78,9 @@ P = {"retreat_hp": 0.0, "recover_hp": 0.8, "range": 75.0, "peek_max": 9.0, "clos
      "bdodge": 0,         # step out of a gun bullet's path. 1: while strafing, 2: also outside a fight, 3: always
      "bdodge_m": 1.0,     # m of margin round our body that counts as a hit
      "bdodge_t": 0.6,     # s: react only to a bullet that arrives within this time
-     "bdodge_clear": 1}   # 1: step only when the step gets the whole body out of the bullet's path
-P.update({'bdodge': 3, 'strafe_lo': 3, 'strafe_hi': 5, 'strafe_flip': 1})
+     "bdodge_clear": 1,   # 1: step only when the step gets the whole body out of the bullet's path
+    "strafe_boost": 0}   # above this much energy, boost while strafing in a fight. 0: never
+P.update({'strafe_boost': 50})
 try:
     P.update(json.loads(os.environ.get("MECH_P") or "{}"))
 except Exception:
@@ -985,7 +986,8 @@ class Bot:
                     self.strafe_sign = ss
                 break
         a["move"] = move
-        if self.retreat and me["energy"] > 30:
+        sb = self.P["strafe_boost"]
+        if (self.retreat and me["energy"] > 30) or (sb and me["energy"] > sb):
             a["boost"] = True
 
     def loot(self, a, o, nc, nr, dn):
