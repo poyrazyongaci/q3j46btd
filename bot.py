@@ -84,6 +84,10 @@ P = {"retreat_hp": 0.0, "recover_hp": 0.8, "range": 75.0, "peek_max": 9.0, "clos
      "bdodge_t": 0.6,     # s: react only to a bullet that arrives within this time
      "bdodge_clear": 1,   # 1: step only when the step gets the whole body out of the bullet's path
     "strafe_boost": 0,   # above this much energy, boost while strafing in a fight. 0: never
+    "grab_t": 0.0,       # s: this early and without a second weapon, a weapon on the ground comes first and a far idle mech starts no fight
+    "grab_r": 250.0,     # m: reach of that opening grab
+    "grab_l": 0,         # 1: the grab goes on until a laser is held, lightning or mortar do not end it
+    "grab_fresh": 8.0,   # s: the grab only walks to a weapon seen this recently, so one that another bot took is given up
     "eco_t": 0.0,        # s: this early, a far mech that did not hurt or aim at us does not start a fight. 0: off
     "eco_cubes": 10,     # that rule holds only below this many cubes
     "eco_r": 150.0,      # m: a mech closer than this always counts
@@ -97,8 +101,6 @@ P = {"retreat_hp": 0.0, "recover_hp": 0.8, "range": 75.0, "peek_max": 9.0, "clos
     "pile_s": 3.0,       # s: window for counting attackers
     "pile_hold": 6.0,    # s: stay broken off at least this long after the last such moment
     "pile_ffa_t": 20.0,  # s: this early, a pile-on also flips the ffa_sw switch
-    "gap_a": 0.0,        # s: with gap_b above 0, hold fire from gap_a to gap_b (a measuring build, not for play)
-    "gap_b": 0.0,
     "quit_t": 0.0,       # s: above 0, hold fire for good from this time on (a measuring build, not for play)
     "drop_until": 0.0,   # s: above 0, leave alone every supply drop that lands later than this
     "drop_lead": -1.0,   # s: at or above 0, set off for a supply drop so as to reach it this long before it lands
@@ -122,7 +124,7 @@ COVER_P = {"picky": 1, "avoid": 1, "den": 1, "quiet": 1, "heal_stay": 1, "retrea
 # a match where the others fight each other: only outlasting them scores
 FFA_P = {"picky": 1, "avoid": 1, "retreat_hp": 0.5, "retreat2_hp": 0.7, "quiet": 1, "heal_stay": 1, "recover_hp": 0.9,
          "bdodge": 3, "bdodge_clear": 0, "grab_laser": 120.0}
-P.update({'npc_r': 230, 'npc_hp': 0.5, 'ffa_sw': 1, 'gap_a': 60, 'gap_b': 90})
+P.update({'npc_r': 230, 'npc_hp': 0.5, 'ffa_sw': 1, 'grab_t': 40, 'grab_l': 1, 'laser_range': 160})
 try:
     P.update(json.loads(os.environ.get("MECH_P") or "{}"))
 except Exception:
@@ -729,6 +731,8 @@ class Bot:
         threats = [m for m in self.known.values() if m["kind"] == "mech" and t - m["seen"] <= self.P["mem_s"]]
         if self.P["picky"] or self.P["avoid"]:
             threats = [m for m in threats if m["id"] in self.hostile]
+        elif self.grabbing(t):
+            threats = [m for m in threats if m["id"] in self.hostile or math.dist(m["pos"], p) < 60.0]
         elif self.P["eco_t"] and t < self.P["eco_t"] and me["cubes"] < self.P["eco_cubes"]:
             er = self.P["eco_r"]
             threats = [m for m in threats if m["id"] in self.hostile or math.dist(m["pos"], p) < er]
@@ -1146,6 +1150,12 @@ class Bot:
         if (self.retreat and me["energy"] > 30) or (sb and me["energy"] > sb):
             a["boost"] = True
 
+    def grabbing(self, t):
+        if not self.P["grab_t"] or t >= self.P["grab_t"]:
+            return False
+        w = self.me["weapons"][1]
+        return w is None or (self.P["grab_l"] and w["kind"] != "laser")
+
     def loot(self, a, o, nc, nr, dn):
         me = self.me
         p = me["pos"]
@@ -1177,12 +1187,15 @@ class Bot:
             q = it["pos"]
             d = math.hypot(q[0] - p[0], q[1] - p[1])
             want_laser = it["type"] == "pickup" and it.get("kind") == "laser" and "laser" not in held and d < self.P["laser_r"]
-            if (d > self.P["loot_r"] and not want_laser) or not inside(q):
+            grab = it["type"] == "pickup" and d < self.P["grab_r"] and self.grabbing(t) and t - it["seen"] < self.P["grab_fresh"]
+            if (d > self.P["loot_r"] and not want_laser and not grab) or not inside(q):
                 continue
             if it["type"] == "pickup":
                 if it["kind"] in held or PREF.get(it["kind"], 0) <= cur or (self.P["no_mortar"] and it["kind"] == "mortar"):
                     continue
                 s = d - 70.0
+                if grab:
+                    s = d - 400.0 - (150.0 if it["kind"] == "laser" else 0.0)
                 if want_laser:
                     s = d - 70.0 - self.P["laser_r"]
             elif it["type"] == "cube":
@@ -1327,8 +1340,6 @@ def _act_quit(self, o):
     a = _act_full(self, o)
     q = self.P["quit_t"]
     if q > 0 and o["t"] >= q and isinstance(a, dict):
-        a["fire"] = [False, False]
-    if self.P["gap_b"] > 0 and self.P["gap_a"] <= o["t"] < self.P["gap_b"] and isinstance(a, dict):
         a["fire"] = [False, False]
     return a
 
