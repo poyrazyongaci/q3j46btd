@@ -140,7 +140,7 @@ COVER_P = {"picky": 1, "avoid": 1, "den": 1, "quiet": 1, "heal_stay": 1, "retrea
 # a match where the others fight each other: only outlasting them scores
 FFA_P = {"picky": 1, "avoid": 1, "retreat_hp": 0.5, "retreat2_hp": 0.7, "quiet": 1, "heal_stay": 1, "recover_hp": 0.9,
          "bdodge": 3, "bdodge_clear": 0, "grab_laser": 120.0}
-P.update({'npc_r': 230, 'npc_hp': 0.5, 'ffa_sw': 1, 'glance': 2, 'bdodge': 3, 'salt': 2})
+P.update({'npc_r': 230, 'npc_hp': 0.5, 'ffa_sw': 1, 'glance': 2, 'bdodge': 3})
 try:
     P.update(json.loads(os.environ.get("MECH_P") or "{}"))
 except Exception:
@@ -1544,6 +1544,10 @@ def main():
             log(traceback.format_exc())
             act = fallback(last)
         act["tick"] = msg["tick"]
+        # timing probe: hold every answer 15 ms longer
+        t1 = t0 + (time.perf_counter() - t0) + 0.015
+        while time.perf_counter() < t1:
+            pass
         out.write(json.dumps(act) + "\n")
         out.flush()
         last = act
