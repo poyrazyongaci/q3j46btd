@@ -140,7 +140,7 @@ COVER_P = {"picky": 1, "avoid": 1, "den": 1, "quiet": 1, "heal_stay": 1, "retrea
 # a match where the others fight each other: only outlasting them scores
 FFA_P = {"picky": 1, "avoid": 1, "retreat_hp": 0.5, "retreat2_hp": 0.7, "quiet": 1, "heal_stay": 1, "recover_hp": 0.9,
          "bdodge": 3, "bdodge_clear": 0, "grab_laser": 120.0}
-P.update({'npc_r': 230, 'npc_hp': 0.5, 'ffa_sw': 1, 'lose': 1, 'lethal': 0.7, 'no_mortar': 1, 'laser_r': 240, 'loot_r': 150, 'cube_r': 70, 'cube_low': 0.57, 'laser_range': 120, 'range': 85, 'eng': 1, 'max_t': 240, 'foe_range': 1, 'ups': 2, 'strafe_lo': 0.3, 'strafe_hi': 1.0, 'ring': 1, 'nocover': 2, 'bdodge': 3, 'glance': 2})
+P.update({'npc_r': 230, 'npc_hp': 0.5, 'ffa_sw': 1, 'glance': 2, 'bdodge': 3})
 try:
     P.update(json.loads(os.environ.get("MECH_P") or "{}"))
 except Exception:
