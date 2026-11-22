@@ -21,6 +21,9 @@ UPGRADES = ["plating", "armor", "nanites", "gun_mag", "gun_damage", "laser_damag
             "servos", "gun_velocity", "gyros", "lightning_chain", "lightning_range",
             "mortar_reload", "capacitor", "reactor", "jets", "sensors"]
 # the same list ordered by fighting power: a bigger magazine is +31% sustained gun damage, armor only 9% more life
+UPGRADES3 = ["plating", "armor", "laser_damage", "laser_charge", "nanites", "gun_damage", "gun_rate",
+             "lightning_efficiency", "lightning_range", "servos", "gun_mag", "gun_velocity", "gyros", "lightning_chain",
+             "reactor", "capacitor", "mortar_reload", "mortar_splash", "mortar_velocity", "sensors", "jets", "laser_pierce"]
 UPGRADES2 = ["gun_mag", "gun_damage", "plating", "gun_rate", "laser_damage", "armor", "laser_charge", "gun_velocity",
              "nanites", "servos", "gyros", "lightning_efficiency", "lightning_chain", "lightning_range",
              "mortar_reload", "capacitor", "reactor", "jets", "sensors"]
@@ -36,7 +39,7 @@ P = {"retreat_hp": 0.0, "recover_hp": 0.8, "range": 75.0, "peek_max": 9.0, "clos
      "laser_disc": 1,     # 1: start a laser charge only when a shot is likely before the hold timer runs out
      "peek_charge": 6.0,  # m to the peek spot under which a charge behind cover is allowed
      "hear": 1,           # 1: with no threat known, face the last near sound
-     "glance": 1,         # 1: turn to an attacker we cannot see
+     "glance": 1,         # 1: turn to an attacker we cannot see. 2: not while the target we fight is in sight
      "laser_hide": 0,     # 1: break line of sight for the whole time an enemy laser can still fire at us
      "laser_hold": 2.8,   # s a charge can be kept before the server fires it (0.75 charge + 2 hold)
      "grab": 45.0,        # m: with an empty second slot, leave the fight line to take a weapon this close
@@ -84,10 +87,6 @@ P = {"retreat_hp": 0.0, "recover_hp": 0.8, "range": 75.0, "peek_max": 9.0, "clos
      "bdodge_t": 0.6,     # s: react only to a bullet that arrives within this time
      "bdodge_clear": 1,   # 1: step only when the step gets the whole body out of the bullet's path
     "strafe_boost": 0,   # above this much energy, boost while strafing in a fight. 0: never
-    "grab_t": 0.0,       # s: this early and without a second weapon, a weapon on the ground comes first and a far idle mech starts no fight
-    "grab_r": 250.0,     # m: reach of that opening grab
-    "grab_l": 0,         # 1: the grab goes on until a laser is held, lightning or mortar do not end it
-    "grab_fresh": 8.0,   # s: the grab only walks to a weapon seen this recently, so one that another bot took is given up
     "eco_t": 0.0,        # s: this early, a far mech that did not hurt or aim at us does not start a fight. 0: off
     "eco_cubes": 10,     # that rule holds only below this many cubes
     "eco_r": 150.0,      # m: a mech closer than this always counts
@@ -117,14 +116,31 @@ P = {"retreat_hp": 0.0, "recover_hp": 0.8, "range": 75.0, "peek_max": 9.0, "clos
     "cover_n": 0,        # above 0: play the COVER_P settings while this many mechs are in sight, the normal ones otherwise
     "cover_n_s": 2.0,    # s below that count before the normal settings come back
     "hide_t": 0.0,       # s: above 0, play the COVER_P settings until this time, then the normal ones (a measuring build)
+    "lose": 0,           # 1: short break-off while outnumbered and hurt, by the count of mechs in sight
+    "lose_r": 160.0,     # m: mechs nearer than this count
+    "lose_s": 1.5,       # s of break-off after the last losing tick
+    "gd": 0,             # 1: turn on the whole GD_P set below at the first decision
+    "eng": 0,            # 1: fight a mech only if it is close, hit us, closes fast, is weak and near, or aims at us
+    "max_t": 0.0,        # m: above 0, never pick a target farther than this
+    "nocover": 0,        # 1: with a laser or lightning, or while finishing, fight in the open and keep the line of sight
+    "foe_range": 0,      # 1: fighting distance by our weapon and by the weapon the target holds
+    "kite": 0.0,         # m: on open ground, for 2 s after the target hit us, keep at least this distance while firing (0 is off)
+    "ring": 0,           # 1: in the open, each decision pick the best of 16 spots 6 m around us (range, sight line, other enemies)
+    "fin_r": 0.0,        # m: above 0, close to this distance on a weak target while we are healthy and few are near
+    "cube_low": 1.0,     # share of cube_r that counts while we are at or under half HP
+    "lethal": 0.0,       # above 0: let a part-charged beam go once this share of its damage kills the target
     "ffa_p": None}       # local tests: settings to switch to in place of FFA_P
 # late in a match: stay out of sight, shoot back only at mechs that came for us
+# one set: selective targets, break-off on a count, range by weapon, open-ground ring fight, laser first
+GD_P = {"lose": 1, "lethal": 0.7, "no_mortar": 1, "laser_r": 240.0, "loot_r": 150.0, "cube_r": 70.0, "cube_low": 0.57,
+        "laser_range": 120.0, "range": 85.0, "tsel": 1, "eng": 1, "max_t": 240.0, "nocover": 1, "foe_range": 1,
+        "fin_r": 20.0, "ups": 2, "bdodge": 1, "strafe_lo": 0.3, "strafe_hi": 1.0}
 COVER_P = {"picky": 1, "avoid": 1, "den": 1, "quiet": 1, "heal_stay": 1, "retreat_hp": 0.5, "retreat2_hp": 0.7,
            "recover_hp": 0.9, "npc_hp": 2.0}
 # a match where the others fight each other: only outlasting them scores
 FFA_P = {"picky": 1, "avoid": 1, "retreat_hp": 0.5, "retreat2_hp": 0.7, "quiet": 1, "heal_stay": 1, "recover_hp": 0.9,
          "bdodge": 3, "bdodge_clear": 0, "grab_laser": 120.0}
-P.update({'npc_r': 230, 'npc_hp': 0.5, 'ffa_sw': 1, 'grab_t': 40, 'grab_l': 1, 'laser_range': 120, 'salt': 2})
+P.update({'npc_r': 230, 'npc_hp': 0.5, 'ffa_sw': 1, 'lose': 1, 'lethal': 0.7, 'no_mortar': 1, 'laser_r': 240, 'loot_r': 150, 'cube_r': 70, 'cube_low': 0.57, 'laser_range': 120, 'range': 85, 'eng': 1, 'max_t': 240, 'foe_range': 1, 'ups': 2, 'strafe_lo': 0.3, 'strafe_hi': 1.0, 'ring': 1, 'nocover': 2, 'bdodge': 3, 'glance': 2})
 try:
     P.update(json.loads(os.environ.get("MECH_P") or "{}"))
 except Exception:
@@ -170,6 +186,11 @@ class Bot:
         self.aim_n = {}
         self.items = {}
         self.retreat = False
+        self.lose_t = -99.0
+        self.gd_on = False
+        self.fin2 = False
+        self.ring_los = 1.0
+        self.ring_thr = []
         self.hit_t = {}
         self.stick_id, self.stick_t = None, -9.0
         self.swept = False
@@ -255,7 +276,7 @@ class Bot:
         best, bs = 0, 1e9
         for i, c in enumerate(offer.get("choices", [])):
             cid = c.get("id", "")
-            order = UPGRADES2 if self.P["ups"] else UPGRADES
+            order = UPGRADES3 if self.P["ups"] == 2 else UPGRADES2 if self.P["ups"] else UPGRADES
             s = order.index(cid) if cid in order else 50
             if s < bs:
                 best, bs = i, s
@@ -567,6 +588,16 @@ class Bot:
                 if ch > 0:
                     # hold until the beam will land, the server fires it at hold_s anyway
                     ready = ch >= 0.95 * full
+                    lk = self.P["lethal"]
+                    if lk > 0 and not ready and m.get("kind") == "mech" and ch >= w["stats"].get("min_charge", 0.15):
+                        mf = w["stats"].get("min_frac", 0.35)
+                        cc = self.cfg["cubes"]
+                        dmg = w["stats"]["damage"] * (mf + (1.0 - mf) * min(1.0, ch / full))
+                        dmg *= 1.0 + cc["damage_per_cube"] * min(me.get("cubes", 0), cc["stat_cap"])
+                        if "mortar" in (m.get("weapons") or []):
+                            dmg *= 1.0 + w["stats"].get("cookoff", 0.6)
+                        if dmg * lk >= m.get("hp", 1e9):
+                            ready = True
                     fire[i] = not (ready and aligned and los and visible)
                     if ch >= full + 1.6:
                         fire[i] = False
@@ -679,6 +710,9 @@ class Bot:
             if self.P["ffa_sw"] and not self.ffa and t < self.P["pile_ffa_t"]:
                 self.ffa = True
                 self.P.update(self.P["ffa_p"] or FFA_P)
+        if self.P["gd"] and not self.gd_on:
+            self.gd_on = True
+            self.P.update(GD_P)
         if self.P["hide_t"] > 0:
             if self.hide == 0:
                 self.hide = 1
@@ -729,10 +763,27 @@ class Bot:
         self.must_go = must_go
 
         threats = [m for m in self.known.values() if m["kind"] == "mech" and t - m["seen"] <= self.P["mem_s"]]
+        if self.P["eng"]:
+            late = nr <= 70.0 or o.get("alive", 16) <= 3
+
+            def eng(m):
+                q = m["pos"]
+                dm = math.hypot(q[0] - p[0], q[1] - p[1])
+                if late or dm < 60.0 or t - self.hit_t.get(m["id"], -9.0) < 6.0:
+                    return True
+                v = m.get("vel") or [0.0, 0.0, 0.0]
+                closing = -((q[0] - p[0]) * v[0] + (q[1] - p[1]) * v[1]) / max(dm, 1e-6)
+                if closing > 3.0 and dm < 180.0:
+                    return True
+                if m.get("hp", 1400) < 0.4 * m.get("max_hp", 1400) and dm < 160.0:
+                    return True
+                aim = m.get("aim")
+                return bool(aim) and dm < 190.0 and abs(adiff(aim[0], math.atan2(p[1] - q[1], p[0] - q[0]))) < 0.3
+            threats = [m for m in threats if eng(m)]
+        if self.P["max_t"] > 0:
+            threats = [m for m in threats if math.dist(m["pos"], p) < self.P["max_t"]]
         if self.P["picky"] or self.P["avoid"]:
             threats = [m for m in threats if m["id"] in self.hostile]
-        elif self.grabbing(t):
-            threats = [m for m in threats if m["id"] in self.hostile or math.dist(m["pos"], p) < 60.0]
         elif self.P["eco_t"] and t < self.P["eco_t"] and me["cubes"] < self.P["eco_cubes"]:
             er = self.P["eco_r"]
             threats = [m for m in threats if m["id"] in self.hostile or math.dist(m["pos"], p) < er]
@@ -769,7 +820,24 @@ class Bot:
             rh = self.P["retreat2_hp"]
         # a target far weaker than us is finished first: its death is a point and often ends the fight
         fin = primary is not None and primary.get("hp", 1e9) < self.P["finish"] * me["hp"]
+        if self.P["lose"]:
+            # count only mechs listed this tick, so the break-off ends as soon as they drop out of sight
+            near = sum(1 for m in threats if t - m["seen"] < 0.05 and math.dist(m["pos"], p) < self.P["lose_r"])
+            losing = (near >= 2 and hpf < 0.55) or (near >= 3 and hpf < 0.8)
+            if primary is not None:
+                tf = primary.get("hp", 1400) / max(1.0, primary.get("max_hp", 1400))
+                if hpf < 0.35 and tf > hpf + 0.1:
+                    losing = True
+                if tf < 0.25 and hpf > 0.2 and near <= 2:
+                    losing = False
+            if losing:
+                self.lose_t = t
+        lose_on = self.P["lose"] and t - self.lose_t < self.P["lose_s"]
         if fin:
+            self.retreat = False
+        elif lose_on:
+            self.retreat = True
+        elif self.P["lose"] and self.retreat and hpf >= rh and t >= self.pile_until:
             self.retreat = False
         elif hpf < rh or t < self.pile_until:
             self.retreat = True
@@ -826,7 +894,7 @@ class Bot:
         if bd and self.jet is None and t >= self.unstick_until and not a.get("jump") \
                 and (bd >= 3 or self.strafe_t == t or (bd >= 2 and self.mode != "fight")):
             self.sidestep(a, o)
-        if self.P["glance"] and self.dmg_by is not None:
+        if self.P["glance"] and self.dmg_by is not None and not (self.P["glance"] >= 2 and self.mode == "fight" and self.blind_since is None):
             if t - self.last_dmg_t < 0.15 and not any(m["id"] == self.dmg_by for m in o.get("mechs", [])):
                 self.glance_until = t + 0.9
             if t < self.glance_until:
@@ -925,6 +993,13 @@ class Bot:
             self.cover = c
             self.cover_t = t
         c = None if NOCOVER else self.cover
+        self.ring_los = 1.0 if (ready or laser or ltng) else -1.0
+        self.ring_thr = threats
+        fr = self.P["fin_r"]
+        self.fin2 = fr > 0 and crowd <= 2 and me["hp"] > 0.42 * me["max_hp"] \
+            and primary.get("hp", 1e9) < 0.38 * primary.get("max_hp", 1400)
+        if self.P["nocover"] and not self.retreat and (laser or ltng or self.fin2 or self.P["nocover"] >= 2):
+            c = None  # 2: a gun fight also stays on the move in the open
         seen_now = t - primary["seen"] < 0.15 and self.can_hit(primary)
         if seen_now:
             self.blind_since = None
@@ -1011,7 +1086,7 @@ class Bot:
                         continue
                     qq = it["pos"]
                     dd = math.hypot(qq[0] - p[0], qq[1] - p[1])
-                    if dd < self.P["cube_r"] and math.hypot(qq[0] - zc[0], qq[1] - zc[1]) < zr - 8.0 and (near is None or dd < near[0]):
+                    if dd < self.P["cube_r"] * (self.P["cube_low"] if me["hp"] <= 0.5 * me["max_hp"] else 1.0) and math.hypot(qq[0] - zc[0], qq[1] - zc[1]) < zr - 8.0 and (near is None or dd < near[0]):
                         near = (dd, qq, "cube")
             if near is not None:
                 # a second weapon about doubles our damage, a cube is +4% HP and damage, a drop is a full repair:
@@ -1129,8 +1204,25 @@ class Bot:
             want = 85.0
         if have_ltng and "lightning" not in ew:
             want = 30.0
+        if self.P["foe_range"]:
+            want = self.P["range"]
+            if self.P["laser_range"] > 0 and any(w and w["kind"] == "laser" for w in me["weapons"]):
+                want = self.P["laser_range"]
+            if have_ltng and me["energy"] > 12:
+                want = 28.0
+            if not have_ltng:
+                if "lightning" in ew:
+                    want = max(want, 64.0)
+                if "mortar" in ew:
+                    want = max(want, 80.0)
+        if self.P["kite"] and self.t - self.hit_t.get(primary.get("id"), -9.0) < 2.0:
+            want = max(want, self.P["kite"])
+        if self.fin2:
+            want = self.P["fin_r"]
         if self.retreat:
             want = 400.0
+        elif self.P["ring"] and primary.get("kind") == "mech" and self.ring(a, primary, bearing, want):
+            return
         rad = max(-1.0, min(1.0, (d - want) / 25.0))
         s = self.strafe_sign
         r1 = 1.0 if rad >= 0 else -1.0
@@ -1150,11 +1242,45 @@ class Bot:
         if (self.retreat and me["energy"] > 30) or (sb and me["energy"] > sb):
             a["boost"] = True
 
-    def grabbing(self, t):
-        if not self.P["grab_t"] or t >= self.P["grab_t"]:
-            return False
-        w = self.me["weapons"][1]
-        return w is None or (self.P["grab_l"] and w["kind"] != "laser")
+    def ring(self, a, primary, bearing, want):
+        """Open-ground fight step: score staying put and 16 spots 6 m away, walk to the best."""
+        me = self.me
+        p = me["pos"]
+        ang = np.arange(16) * (math.pi / 8)
+        dx = np.concatenate(([0.0], np.cos(ang)))
+        dy = np.concatenate(([0.0], np.sin(ang)))
+        r = np.concatenate(([0.0], np.full(16, 6.0)))
+        cx, cy = p[0] + dx * r, p[1] + dy * r
+        ok = np.ones(17, dtype=bool)
+        ok[1:] = np.asarray(self.W.walkable_to(p[0], p[1], cx[1:], cy[1:]), dtype=bool)
+        cz = np.asarray(self.W.heights(cx, cy), dtype=np.float32)
+        tc, _ = self.tgt(primary)
+        q = primary["pos"]
+        sc = -1.1 * np.abs(np.hypot(q[0] - cx, q[1] - cy) - want) - 0.4 * r
+        los = self.W.los(np.stack([cx, cy, cz + self.mz], axis=1), np.array(tc, dtype=np.float32))
+        sc = sc + 45.0 * self.ring_los * los
+        body = np.stack([cx, cy, cz + 0.6 * self.h_mech], axis=1)
+        for e in self.ring_thr:
+            if e is primary or self.t - e["seen"] > 1.0 or math.dist(e["pos"], p) > 170.0:
+                continue
+            ec, _ = self.tgt(e)
+            sc = sc - 30.0 * self.W.los(body, np.array(ec, dtype=np.float32))
+        z = self.zone
+        sc = sc - 2.0 * np.maximum(0.0, np.hypot(cx - z["center"][0], cy - z["center"][1]) - (z["radius"] - 10.0))
+        sx, sy = -math.sin(bearing) * self.strafe_sign, math.cos(bearing) * self.strafe_sign
+        side = dx * sx + dy * sy
+        if self.ring_los > 0:
+            sc = sc + 9.0 * side
+        sc[0] -= 8.0
+        if self.ring_los < 0 and not los[0]:
+            sc[0] += 14.0
+        sc[~ok] = -1e9
+        if np.any(~ok[1:] & (side[1:] > 0.9)):
+            self.strafe_sign = -self.strafe_sign
+            self.strafe_until = self.t + 0.5
+        i = int(np.argmax(sc))
+        a["move"] = [float(dx[i]), float(dy[i])]
+        return True
 
     def loot(self, a, o, nc, nr, dn):
         me = self.me
@@ -1187,15 +1313,12 @@ class Bot:
             q = it["pos"]
             d = math.hypot(q[0] - p[0], q[1] - p[1])
             want_laser = it["type"] == "pickup" and it.get("kind") == "laser" and "laser" not in held and d < self.P["laser_r"]
-            grab = it["type"] == "pickup" and d < self.P["grab_r"] and self.grabbing(t) and t - it["seen"] < self.P["grab_fresh"]
-            if (d > self.P["loot_r"] and not want_laser and not grab) or not inside(q):
+            if (d > self.P["loot_r"] and not want_laser) or not inside(q):
                 continue
             if it["type"] == "pickup":
                 if it["kind"] in held or PREF.get(it["kind"], 0) <= cur or (self.P["no_mortar"] and it["kind"] == "mortar"):
                     continue
                 s = d - 70.0
-                if grab:
-                    s = d - 400.0 - (150.0 if it["kind"] == "laser" else 0.0)
                 if want_laser:
                     s = d - 70.0 - self.P["laser_r"]
             elif it["type"] == "cube":
