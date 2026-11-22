@@ -104,7 +104,8 @@ P = {"retreat_hp": 0.0, "recover_hp": 0.8, "range": 75.0, "peek_max": 9.0, "clos
     "drop_until": 0.0,   # s: above 0, leave alone every supply drop that lands later than this
     "drop_lead": -1.0,   # s: at or above 0, set off for a supply drop so as to reach it this long before it lands
     "drop_lead_t": 120.0,  # s: that timing holds only from this time on. Before it: 8 s early in a fight, 20 s outside one
-    "two": 0,            # 1: with two mechs hitting us, also score spots 14 and 24 m away and weigh the second attacker's line to us double
+    "core": 0,           # 1: aim from where the muzzle will be at the shot, pull the trigger one turn step early, aim high when the centre is blocked
+    "two": 0,            # 1 or 2: with a second mech on us, also score spots 14 and 24 m away and weigh the second attacker's line to us double
     "zone_dl": 0,        # 1: leave for the next circle only when the shrinking edge would catch us, and fight on until then
     "ldodge": 0,         # 1: boost sideways out of a laser that a mech in sight charges at us
     "zone_late": 0.0,    # s: above 0, from this time on walk into the next circle only when the edge is close
@@ -143,7 +144,7 @@ COVER_P = {"picky": 1, "avoid": 1, "den": 1, "quiet": 1, "heal_stay": 1, "retrea
 # a match where the others fight each other: only outlasting them scores
 FFA_P = {"picky": 1, "avoid": 1, "retreat_hp": 0.5, "retreat2_hp": 0.7, "quiet": 1, "heal_stay": 1, "recover_hp": 0.9,
          "bdodge": 3, "bdodge_clear": 0, "grab_laser": 120.0}
-P.update({'npc_r': 230, 'npc_hp': 0.5, 'ffa_sw': 1, 'lose': 1, 'lethal': 0.7, 'no_mortar': 1, 'laser_r': 240, 'loot_r': 150, 'cube_r': 70, 'cube_low': 0.57, 'laser_range': 120, 'range': 85, 'eng': 1, 'max_t': 240, 'foe_range': 1, 'ups': 2, 'strafe_lo': 0.3, 'strafe_hi': 1.0, 'ring': 1, 'nocover': 2, 'bdodge': 3, 'glance': 2, 'zone_dl': 1, 'ldodge': 1, 'two': 1})
+P.update({'npc_r': 230, 'npc_hp': 0.5, 'ffa_sw': 1, 'glance': 2, 'bdodge': 3, 'core': 1})
 try:
     P.update(json.loads(os.environ.get("MECH_P") or "{}"))
 except Exception:
@@ -544,6 +545,16 @@ class Bot:
         ws = me["weapons"]
         los = self.W.los1(mu, c)
         visible = age < 0.05
+        core = self.P["core"] and m.get("kind") == "mech"
+        if core:
+            mv = me.get("vel") or [0.0, 0.0, 0.0]
+            mu = [mu[0] + mv[0] * 0.08, mu[1] + mv[1] * 0.08, mu[2]]
+            if not los and visible:
+                # the centre is behind something: the upper body may still show
+                hi = [c[0], c[1], c[2] + 0.7 * (c[2] - m["pos"][2])]
+                if self.W.los1(self.muzzle(), hi):
+                    c, rad, los = hi, 0.5 * rad, True
+            d = math.dist(mu, c)
         aim_pt = c
         charged = False
         for i, w in enumerate(ws):
@@ -576,6 +587,11 @@ class Bot:
         # direct-fire weapons are judged on the direct line, also while the mortar arc owns the aim
         ey = abs(adiff(me["aim"][0], gyaw))
         ep = abs(me["aim"][1] - gpitch)
+        if core:
+            # the torso keeps turning until the shot leaves
+            st = me.get("stats") or {}
+            ey = max(0.0, ey - 0.05 * float(st.get("turn_rate", 4.0)))
+            ep = max(0.0, ep - 0.05 * float(st.get("pitch_rate", 2.0)))
         tol = math.atan2(rad * 0.8, max(d, 1.0)) + 0.008
         aligned = ey < tol and ep < tol + 0.01
         for i, w in enumerate(ws):
@@ -1284,7 +1300,12 @@ class Bot:
         me = self.me
         p = me["pos"]
         ang = np.arange(16) * (math.pi / 8)
-        hot = [e for e in self.ring_thr if e is not primary and self.t - self.hit_t.get(e.get("id"), -9.0) < 3.0] if self.P["two"] else []
+        hot = []
+        if self.P["two"]:
+            # 1: a second mech that hit us in the last 3 s. 2: any second mech in sight within 170 m, or one that hit us in the last 8 s
+            hot = [e for e in self.ring_thr if e is not primary and e.get("kind") == "mech" and self.t - e["seen"] <= 1.0
+                   and (self.t - self.hit_t.get(e.get("id"), -99.0) < (3.0 if self.P["two"] < 2 else 8.0)
+                        or (self.P["two"] >= 2 and math.dist(e["pos"], p) < 170.0))]
         rings = (6.0, 14.0, 24.0) if hot else (6.0,)
         dx = np.concatenate([[0.0]] + [np.cos(ang)] * len(rings))
         dy = np.concatenate([[0.0]] + [np.sin(ang)] * len(rings))
