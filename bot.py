@@ -104,10 +104,6 @@ P = {"retreat_hp": 0.0, "recover_hp": 0.8, "range": 75.0, "peek_max": 9.0, "clos
     "drop_until": 0.0,   # s: above 0, leave alone every supply drop that lands later than this
     "drop_lead": -1.0,   # s: at or above 0, set off for a supply drop so as to reach it this long before it lands
     "drop_lead_t": 120.0,  # s: that timing holds only from this time on. Before it: 8 s early in a fight, 20 s outside one
-    "core": 0,           # 1: aim from where the muzzle will be at the shot, pull the trigger one turn step early, aim high when the centre is blocked
-    "two": 0,            # 1 or 2: with a second mech on us, also score spots 14 and 24 m away and weigh the second attacker's line to us double
-    "zone_dl": 0,        # 1: leave for the next circle only when the shrinking edge would catch us, and fight on until then
-    "ldodge": 0,         # 1: boost sideways out of a laser that a mech in sight charges at us
     "zone_late": 0.0,    # s: above 0, from this time on walk into the next circle only when the edge is close
     "zone_late_m": 60.0,  # m: how close the edge must be for that
     "tsel": 0,           # 1: pick the target by distance plus HP, stay on it for 2 s, and go for a mech under 30% HP
@@ -144,7 +140,7 @@ COVER_P = {"picky": 1, "avoid": 1, "den": 1, "quiet": 1, "heal_stay": 1, "retrea
 # a match where the others fight each other: only outlasting them scores
 FFA_P = {"picky": 1, "avoid": 1, "retreat_hp": 0.5, "retreat2_hp": 0.7, "quiet": 1, "heal_stay": 1, "recover_hp": 0.9,
          "bdodge": 3, "bdodge_clear": 0, "grab_laser": 120.0}
-P.update({'npc_r': 230, 'npc_hp': 0.5, 'ffa_sw': 1, 'glance': 2, 'bdodge': 3, 'core': 1})
+P.update({'npc_r': 230, 'npc_hp': 0.5, 'ffa_sw': 1, 'glance': 2, 'bdodge': 3, 'salt': 1})
 try:
     P.update(json.loads(os.environ.get("MECH_P") or "{}"))
 except Exception:
@@ -193,7 +189,6 @@ class Bot:
         self.lose_t = -99.0
         self.gd_on = False
         self.fin2 = False
-        self.zone_pull = self.zone_force = False
         self.ring_los = 1.0
         self.ring_thr = []
         self.hit_t = {}
@@ -545,16 +540,6 @@ class Bot:
         ws = me["weapons"]
         los = self.W.los1(mu, c)
         visible = age < 0.05
-        core = self.P["core"] and m.get("kind") == "mech"
-        if core:
-            mv = me.get("vel") or [0.0, 0.0, 0.0]
-            mu = [mu[0] + mv[0] * 0.08, mu[1] + mv[1] * 0.08, mu[2]]
-            if not los and visible:
-                # the centre is behind something: the upper body may still show
-                hi = [c[0], c[1], c[2] + 0.7 * (c[2] - m["pos"][2])]
-                if self.W.los1(self.muzzle(), hi):
-                    c, rad, los = hi, 0.5 * rad, True
-            d = math.dist(mu, c)
         aim_pt = c
         charged = False
         for i, w in enumerate(ws):
@@ -587,11 +572,6 @@ class Bot:
         # direct-fire weapons are judged on the direct line, also while the mortar arc owns the aim
         ey = abs(adiff(me["aim"][0], gyaw))
         ep = abs(me["aim"][1] - gpitch)
-        if core:
-            # the torso keeps turning until the shot leaves
-            st = me.get("stats") or {}
-            ey = max(0.0, ey - 0.05 * float(st.get("turn_rate", 4.0)))
-            ep = max(0.0, ep - 0.05 * float(st.get("pitch_rate", 2.0)))
         tol = math.atan2(rad * 0.8, max(d, 1.0)) + 0.008
         aligned = ey < tol and ep < tol + 0.01
         for i, w in enumerate(ws):
@@ -780,24 +760,6 @@ class Bot:
         if zl > 0 and t >= zl:
             # the edge moves slower than we walk, so hold the fight line until it is close
             must_go = out > 0 and dc > z["radius"] - self.P["zone_late_m"]
-        self.zone_pull = self.zone_force = False
-        if self.P["zone_dl"]:
-            # when does the moving edge reach where we stand: the circle goes linearly from now to next
-            ss, se = z["shrink_start"], z.get("shrink_end", z["shrink_start"] + 50.0)
-            t_run = max(t, ss)
-            span = max(se - t_run, 0.1)
-            t_edge = se
-            for k in range(1, 21):
-                f = k / 20.0
-                ex = z["center"][0] + (nc[0] - z["center"][0]) * f
-                ey = z["center"][1] + (nc[1] - z["center"][1]) * f
-                if math.hypot(p[0] - ex, p[1] - ey) > z["radius"] + (nr - z["radius"]) * f - 8.0:
-                    t_edge = t_run + span * (k - 1) / 20.0
-                    break
-            need = 1.45 * max(out, 0.0) / 7.5 + 4.0
-            self.zone_pull = out > 0 and t + need + 14.0 >= t_edge
-            self.zone_force = out > 0 and t + need + 3.0 >= t_edge
-            must_go = self.zone_pull
         self.must_go = must_go
 
         threats = [m for m in self.known.values() if m["kind"] == "mech" and t - m["seen"] <= self.P["mem_s"]]
@@ -882,8 +844,7 @@ class Bot:
         elif hpf > self.P["recover_hp"] or (self.retreat and not self.P["heal_stay"] and t - self.last_threat_t > 7.0 and hpf > 0.6):
             self.retreat = False
 
-        if outside or (must_go and (primary is None or self.zone_force) if self.P["zone_dl"] else
-                       must_go and (primary is None or out > 35.0 or t >= z["shrink_start"] - 2.0)):
+        if outside or (must_go and (primary is None or out > 35.0 or t >= z["shrink_start"] - 2.0)):
             self.mode = "zone"
             self.go_zone(a, nc, nr, margin, dn, outside or t >= z["shrink_start"] - 4.0)
             if primary is not None:
@@ -933,20 +894,6 @@ class Bot:
         if bd and self.jet is None and t >= self.unstick_until and not a.get("jump") \
                 and (bd >= 3 or self.strafe_t == t or (bd >= 2 and self.mode != "fight")):
             self.sidestep(a, o)
-        if self.P["ldodge"] and self.jet is None and t >= self.unstick_until and me["energy"] > 25.0:
-            for m in o.get("mechs", []):
-                if not m.get("charging"):
-                    continue
-                b = math.atan2(me["pos"][1] - m["pos"][1], me["pos"][0] - m["pos"][0])
-                if abs(adiff(m["aim"][0], b)) < 0.15 and math.dist(m["pos"], me["pos"]) < 290.0:
-                    mv = a.get("move") or [0.0, 0.0]
-                    nx, ny = -math.sin(b), math.cos(b)
-                    sg = 1.0 if mv[0] * nx + mv[1] * ny >= 0 else -1.0
-                    if not self.W.walkable_line(me["pos"][0], me["pos"][1], me["pos"][0] + nx * sg * 6.0, me["pos"][1] + ny * sg * 6.0):
-                        sg = -sg
-                    a["move"] = [nx * sg, ny * sg]
-                    a["boost"] = True
-                    break
         if self.P["glance"] and self.dmg_by is not None and not (self.P["glance"] >= 2 and self.mode == "fight" and self.blind_since is None):
             if t - self.last_dmg_t < 0.15 and not any(m["id"] == self.dmg_by for m in o.get("mechs", [])):
                 self.glance_until = t + 0.9
@@ -1300,18 +1247,11 @@ class Bot:
         me = self.me
         p = me["pos"]
         ang = np.arange(16) * (math.pi / 8)
-        hot = []
-        if self.P["two"]:
-            # 1: a second mech that hit us in the last 3 s. 2: any second mech in sight within 170 m, or one that hit us in the last 8 s
-            hot = [e for e in self.ring_thr if e is not primary and e.get("kind") == "mech" and self.t - e["seen"] <= 1.0
-                   and (self.t - self.hit_t.get(e.get("id"), -99.0) < (3.0 if self.P["two"] < 2 else 8.0)
-                        or (self.P["two"] >= 2 and math.dist(e["pos"], p) < 170.0))]
-        rings = (6.0, 14.0, 24.0) if hot else (6.0,)
-        dx = np.concatenate([[0.0]] + [np.cos(ang)] * len(rings))
-        dy = np.concatenate([[0.0]] + [np.sin(ang)] * len(rings))
-        r = np.concatenate([[0.0]] + [np.full(16, x) for x in rings])
+        dx = np.concatenate(([0.0], np.cos(ang)))
+        dy = np.concatenate(([0.0], np.sin(ang)))
+        r = np.concatenate(([0.0], np.full(16, 6.0)))
         cx, cy = p[0] + dx * r, p[1] + dy * r
-        ok = np.ones(len(r), dtype=bool)
+        ok = np.ones(17, dtype=bool)
         ok[1:] = np.asarray(self.W.walkable_to(p[0], p[1], cx[1:], cy[1:]), dtype=bool)
         cz = np.asarray(self.W.heights(cx, cy), dtype=np.float32)
         tc, _ = self.tgt(primary)
@@ -1324,12 +1264,9 @@ class Bot:
             if e is primary or self.t - e["seen"] > 1.0 or math.dist(e["pos"], p) > 170.0:
                 continue
             ec, _ = self.tgt(e)
-            sc = sc - (60.0 if any(e is h for h in hot) else 30.0) * self.W.los(body, np.array(ec, dtype=np.float32))
+            sc = sc - 30.0 * self.W.los(body, np.array(ec, dtype=np.float32))
         z = self.zone
         sc = sc - 2.0 * np.maximum(0.0, np.hypot(cx - z["center"][0], cy - z["center"][1]) - (z["radius"] - 10.0))
-        if self.zone_pull:
-            # drift into the next circle while the fight goes on
-            sc = sc - 1.5 * np.maximum(0.0, np.hypot(cx - z["next_center"][0], cy - z["next_center"][1]) - (z["next_radius"] - 20.0))
         sx, sy = -math.sin(bearing) * self.strafe_sign, math.cos(bearing) * self.strafe_sign
         side = dx * sx + dy * sy
         if self.ring_los > 0:
@@ -1338,7 +1275,7 @@ class Bot:
         if self.ring_los < 0 and not los[0]:
             sc[0] += 14.0
         sc[~ok] = -1e9
-        if np.any(~ok[1:17] & (side[1:17] > 0.9)):
+        if np.any(~ok[1:] & (side[1:] > 0.9)):
             self.strafe_sign = -self.strafe_sign
             self.strafe_until = self.t + 0.5
         i = int(np.argmax(sc))
