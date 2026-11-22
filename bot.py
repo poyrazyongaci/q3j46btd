@@ -1,5 +1,4 @@
 """Mech Royale bot. Reads mechfight/1 JSON lines on stdin, answers on stdout."""
-import gc
 import json
 import math
 import os
@@ -141,8 +140,7 @@ COVER_P = {"picky": 1, "avoid": 1, "den": 1, "quiet": 1, "heal_stay": 1, "retrea
 # a match where the others fight each other: only outlasting them scores
 FFA_P = {"picky": 1, "avoid": 1, "retreat_hp": 0.5, "retreat2_hp": 0.7, "quiet": 1, "heal_stay": 1, "recover_hp": 0.9,
          "bdodge": 3, "bdodge_clear": 0, "grab_laser": 120.0}
-P.update({'npc_r': 230, 'npc_hp': 0.5, 'ffa_sw': 1, 'glance': 2, 'bdodge': 3})
-P.setdefault('tbud', 20.0)  # ms one answer may take before the cover search is cut short
+P.update({'npc_r': 230, 'npc_hp': 0.5, 'ffa_sw': 1, 'glance': 2, 'bdodge': 3, 'no_mortar': 1})
 try:
     P.update(json.loads(os.environ.get("MECH_P") or "{}"))
 except Exception:
@@ -469,35 +467,6 @@ class Bot:
         a["boost"] = True
 
     # ------------------------------------------------------------------ cover
-    def late(self, frac=1.0):
-        return (time.perf_counter() - self.t_act) * 1000.0 > self.P["tbud"] * frac
-
-    def los_many(self, a, b, skip=None):
-        """Same answer as W.los for many segments. A coarse pass drops the blocked ones first. Rows in skip stay False."""
-        W = self.W
-        a = np.asarray(a, dtype=np.float32)
-        b = np.asarray(b, dtype=np.float32)
-        a, b = np.broadcast_arrays(a, b)
-        if a.ndim != 2 or len(a) < 24:
-            r = W.los(a, b)
-            return r if skip is None else r & ~skip
-        dx = b[:, 0:1] - a[:, 0:1]
-        dy = b[:, 1:2] - a[:, 1:2]
-        dz = b[:, 2:3] - a[:, 2:3]
-        dmax = float(np.max(np.hypot(dx, dy)))
-        k = int(min(max(dmax / 1.5, 4), 160))
-        t = np.linspace(0.04, 0.96, k, dtype=np.float32)
-        tc = t[::6]
-        if skip is None:
-            clear = np.all(W.heights(a[:, 0:1] + dx * tc, a[:, 1:2] + dy * tc) < (a[:, 2:3] + dz * tc) - 0.15, axis=-1)
-        else:
-            clear = ~skip
-        ix = np.nonzero(clear)[0]
-        if len(ix):
-            a2 = a[ix]
-            clear[ix] = np.all(W.heights(a2[:, 0:1] + dx[ix] * t, a2[:, 1:2] + dy[ix] * t) < (a2[:, 2:3] + dz[ix] * t) - 0.15, axis=-1)
-        return clear
-
     def find_cover(self, threats, primary, offs, straight):
         W, me = self.W, self.me
         p = me["pos"]
@@ -525,18 +494,15 @@ class Bot:
         gunp = cand + np.array([0, 0, self.mz], dtype=np.float32)
         exposed = np.zeros(len(idx), dtype=np.int32)
         can_fire = np.zeros(len(idx), dtype=bool)
-        for n_th, th in enumerate(threats[:4]):
-            if n_th and self.late():
-                return TIMEUP
+        for th in threats[:4]:
             q = th["pos"]
             ts = self.scale(th.get("cubes"))
             mz = np.array([q[0], q[1], q[2] + 7.0 * ts], dtype=np.float32)
-            vis = self.los_many(mz, body)
-            vis = vis | self.los_many(mz, head, skip=vis)
+            vis = W.los(mz, body) | W.los(mz, head)
             exposed += vis
             if th is primary:
                 c, _ = self.tgt(th)
-                can_fire = self.los_many(gunp, np.array(c, dtype=np.float32))
+                can_fire = W.los(gunp, np.array(c, dtype=np.float32))
         d = np.hypot(cand[:, 0] - p[0], cand[:, 1] - p[1])
         hidden = exposed == 0
         if not hidden.any():
@@ -1023,9 +989,8 @@ class Bot:
         if self.cover is None or t - self.cover_t > 0.3:
             c = self.find_cover(threats, primary, self.near, True)
             if c is None and (self.retreat or d > 45.0 or self.P["far_always"] or dodge):
-                c = TIMEUP if self.late(0.5) else self.find_cover(threats, primary, self.far, False)
-            if c is not TIMEUP:
-                self.cover = c
+                c = self.find_cover(threats, primary, self.far, False)
+            self.cover = c
             self.cover_t = t
         c = None if NOCOVER else self.cover
         self.ring_los = 1.0 if (ready or laser or ltng) else -1.0
@@ -1408,11 +1373,7 @@ class Bot:
             return False
         ws.sort(key=lambda m: math.dist(m["pos"], p))
         if self.av is None or t - self.av_t > 0.5:
-            c = self.find_cover(ws, None, self.near, True)
-            if c is None:
-                c = TIMEUP if self.late(0.5) else self.find_cover(ws, None, self.far, False)
-            if c is not TIMEUP:
-                self.av = c
+            self.av = self.find_cover(ws, None, self.near, True) or self.find_cover(ws, None, self.far, False)
             self.av_t = t
         c = self.av
         if c is None:
@@ -1499,7 +1460,6 @@ _act_full = Bot.act
 
 
 def _act_quit(self, o):
-    self.t_act = time.perf_counter()
     a = _act_full(self, o)
     q = self.P["quit_t"]
     if q > 0 and o["t"] >= q and isinstance(a, dict):
@@ -1508,9 +1468,6 @@ def _act_quit(self, o):
 
 
 Bot.act = _act_quit
-
-
-TIMEUP = object()
 
 
 def fallback(last):
@@ -1525,9 +1482,6 @@ def main():
     except Exception:
         log(traceback.format_exc())
         bot = None
-    gc.collect()
-    gc.freeze()
-    gc.set_threshold(20000, 20, 100)
     out = sys.stdout
     out.write(json.dumps({"type": "ready", "name": "cornerstone"}) + "\n")
     out.flush()
